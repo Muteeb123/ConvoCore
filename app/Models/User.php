@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
-class User extends Authenticatable implements MustVerifyEmail
+class User extends Authenticatable 
 {
     /** @use HasFactory<\Database\Factories\UserFactory> */
     use HasFactory, Notifiable;
@@ -23,7 +23,7 @@ class User extends Authenticatable implements MustVerifyEmail
         'name',
         'email',
         'password',
-        'role',
+        'role_id',
     ];
 
     /**
@@ -36,6 +36,20 @@ class User extends Authenticatable implements MustVerifyEmail
         'remember_token',
     ];
 
+     public function role()
+    {
+        return $this->belongsTo(Role::class);
+    }
+
+    public function tasksAssigned()
+    {
+        return $this->hasMany(Task::class, 'assigned_to');
+    }
+
+    public function tasksCreated()
+    {
+        return $this->hasMany(Task::class, 'assigned_by');
+    }
     /**
      * Get the attributes that should be cast.
      *
