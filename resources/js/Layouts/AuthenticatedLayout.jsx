@@ -4,9 +4,11 @@ import NavLink from '@/Components/NavLink';
 import ResponsiveNavLink from '@/Components/ResponsiveNavLink';
 import { Link, usePage } from '@inertiajs/react';
 import { useState } from 'react';
+import FlashModal from '@/Components/FlashModal';
 
 export default function AuthenticatedLayout({ header, children }) {
     const user = usePage().props.auth.user;
+    const flash = usePage().props.flash || {};
 
     const [showingNavigationDropdown, setShowingNavigationDropdown] =
         useState(false);
@@ -178,7 +180,20 @@ export default function AuthenticatedLayout({ header, children }) {
 
             <main className="py-4">
                 <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+                    {/* Flash messages */}
+                    {flash.success && (
+                        <div className="mb-4 rounded-md bg-green-50 p-4">
+                            <div className="text-sm text-green-700">{flash.success}</div>
+                        </div>
+                    )}
+                    {flash.error && (
+                        <div className="mb-4 rounded-md bg-red-50 p-4">
+                            <div className="text-sm text-red-700">{flash.error}</div>
+                        </div>
+                    )}
+
                     {children}
+                    <FlashModal />
                 </div>
             </main>
         </div>

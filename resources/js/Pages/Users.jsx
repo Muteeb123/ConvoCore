@@ -1,18 +1,36 @@
 import { useState } from 'react';
+import { useForm } from '@inertiajs/react';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 import { Head, Link } from '@inertiajs/react';
 import PrimaryButton from '@/Components/PrimaryButton';
 import SecondaryButton from '@/Components/SecondaryButton';
 import Modal from '@/Components/Modal';
 
-export default function Users({ auth, users }) {
+export default function Users({ auth, users, roles }) {
     const [showRoleModal, setShowRoleModal] = useState(false);
     const [showAddModal, setShowAddModal] = useState(false);
     const [selectedUser, setSelectedUser] = useState(null);
 
+    const { data, setData, post, processing, errors, reset } = useForm({
+        name: '',
+        email: '',
+        role_id: '1', // default to Basic User
+    });
+
     const openRoleModal = (user) => {
         setSelectedUser(user);
         setShowRoleModal(true);
+    };
+
+    const submitNewUser = (e) => {
+        e.preventDefault();
+
+        post(route('users.store'), {
+            onSuccess: () => {
+                setShowAddModal(false);
+                reset();
+            },
+        });
     };
 
     return (
@@ -25,9 +43,11 @@ export default function Users({ auth, users }) {
                         <div className="p-6 text-gray-900">
                             <div className="flex justify-between mb-4">
                                 <h2 className="text-lg font-semibold">Users</h2>
-                                <PrimaryButton onClick={() => setShowAddModal(true)}>
-                                    Add User
-                                </PrimaryButton>
+                                {(auth?.user?.role_id === 0 || auth?.user?.role_id == null) && (
+                                    <PrimaryButton onClick={() => setShowAddModal(true)}>
+                                        Add User
+                                    </PrimaryButton>
+                                )}
                             </div>
 
                             {/* Users Table */}
@@ -55,6 +75,25 @@ export default function Users({ auth, users }) {
                                                     >
                                                         View Role
                                                     </SecondaryButton>
+                                                    {auth?.user?.role_id === 0 && auth?.user?.id !== user.id && (
+                                                        <Link
+                                                            as="button"
+                                                            method="delete"
+                                                            href={route('users.destroy', user.id)}
+                                                            onClick={(e) => {
+                                                                if (
+                                                                    !confirm(
+                                                                        `Delete user ${user.email}? This action cannot be undone.`,
+                                                                    )
+                                                                ) {
+                                                                    e.preventDefault();
+                                                                }
+                                                            }}
+                                                            className="ml-2"
+                                                        >
+                                                            <SecondaryButton>Delete</SecondaryButton>
+                                                        </Link>
+                                                    )}
                                                 </td>
                                             </tr>
                                         ))}
@@ -108,45 +147,57 @@ export default function Users({ auth, users }) {
             <Modal show={showAddModal} onClose={() => setShowAddModal(false)}>
                 <div className="p-6">
                     <h3 className="text-lg font-semibold mb-4">Add New User</h3>
-                    <form className="space-y-4">
+                    <form className="space-y-4" onSubmit={submitNewUser}>
                         <div>
-                            <label className="block text-sm font-medium">Name</label>
+                            <label className="block text-sm font-medium">Name (optional)</label>
                             <input
                                 type="text"
                                 className="w-full border rounded px-3 py-2"
                                 placeholder="Enter name"
+                                value={data.name}
+                                onChange={(e) => setData('name', e.target.value)}
                             />
+                            {errors.name && (
+                                <div className="text-sm text-red-600 mt-1">{errors.name}</div>
+                            )}
                         </div>
                         <div>
-                            <label className="block text-sm font-medium">Email</label>
+                            <label className="block text-sm font-medium">Gmail address</label>
                             <input
                                 type="email"
                                 className="w-full border rounded px-3 py-2"
-                                placeholder="Enter email"
+                                placeholder="user@gmail.com"
+                                value={data.email}
+                                onChange={(e) => setData('email', e.target.value)}
+                                required
                             />
+                            {errors.email && (
+                                <div className="text-sm text-red-600 mt-1">{errors.email}</div>
+                            )}
                         </div>
-                        <div>
-                            <label className="block text-sm font-medium">Password</label>
-                            <input
-                                type="password"
-                                className="w-full border rounded px-3 py-2"
-                                placeholder="Enter password"
-                            />
-                        </div>
+
                         <div>
                             <label className="block text-sm font-medium">Role</label>
-                            <select className="w-full border rounded px-3 py-2">
-                                <option value="">Select Role</option>
-                                <option value="1">Admin</option>
-                                <option value="2">Basic User</option>
-                                {/* You can dynamically load roles here */}
+                            <select
+                                className="w-full border rounded px-3 py-2"
+                                value={data.role_id}
+                                onChange={(e) => setData('role_id', e.target.value)}
+                            >
+                                <option value="1">Basic User</option>
+                                <option value="0">Admin</option>
                             </select>
+                            {errors.role_id && (
+                                <div className="text-sm text-red-600 mt-1">{errors.role_id}</div>
+                            )}
                         </div>
+
                         <div className="flex justify-end space-x-2">
-                            <SecondaryButton onClick={() => setShowAddModal(false)}>
+                            <SecondaryButton type="button" onClick={() => setShowAddModal(false)}>
                                 Cancel
                             </SecondaryButton>
-                            <PrimaryButton type="submit">Save</PrimaryButton>
+                            <PrimaryButton type="submit" disabled={processing}>
+                                Save
+                            </PrimaryButton>
                         </div>
                     </form>
                 </div>
