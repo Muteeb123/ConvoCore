@@ -10,4 +10,6 @@ class Permission extends Model
     //
     use HasFactory;
       protected $fillable = ['description'];
+
+      
 }

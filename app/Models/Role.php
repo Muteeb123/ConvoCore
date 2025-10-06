@@ -12,9 +12,9 @@ class Role extends Model
 
      protected $fillable = ['name', 'permission_ids'];
 
-    protected $casts = [
-        'permission_ids' => 'array',
-    ];
+  protected $casts = [
+         'permission_ids' => 'array',
+     ];
 
     public function users()
     {

@@ -23,7 +23,9 @@ const Trigger = ({ children }) => {
 
     return (
         <>
-            <div onClick={toggleOpen}>{children}</div>
+            <div onClick={toggleOpen} className="w-full">
+                {children}
+            </div>
 
             {open && (
                 <div
@@ -43,18 +45,22 @@ const Content = ({
 }) => {
     const { open, setOpen } = useContext(DropDownContext);
 
-    let alignmentClasses = 'origin-top';
+    let alignmentClasses = 'origin-bottom';
 
     if (align === 'left') {
-        alignmentClasses = 'ltr:origin-top-left rtl:origin-top-right start-0';
+        alignmentClasses = 'ltr:origin-bottom-left rtl:origin-bottom-right start-0';
     } else if (align === 'right') {
-        alignmentClasses = 'ltr:origin-top-right rtl:origin-top-left end-0';
+        alignmentClasses = 'ltr:origin-bottom-right rtl:origin-bottom-left end-0';
+    } else if (align === 'top') {
+        alignmentClasses = 'origin-bottom';
     }
 
     let widthClasses = '';
 
     if (width === '48') {
         widthClasses = 'w-48';
+    } else if (width === 'full') {
+        widthClasses = 'w-full';
     }
 
     return (
@@ -69,7 +75,7 @@ const Content = ({
                 leaveTo="opacity-0 scale-95"
             >
                 <div
-                    className={`absolute z-50 mt-2 rounded-md shadow-lg ${alignmentClasses} ${widthClasses}`}
+                    className={`absolute z-50 mb-2 bottom-full rounded-md shadow-lg ${alignmentClasses} ${widthClasses}`}
                     onClick={() => setOpen(false)}
                 >
                     <div
@@ -91,7 +97,7 @@ const DropdownLink = ({ className = '', children, ...props }) => {
         <Link
             {...props}
             className={
-                'block w-full px-4 py-2 text-start text-sm leading-5 text-gray-700 transition duration-150 ease-in-out hover:bg-gray-100 focus:bg-gray-100 focus:outline-none ' +
+                'flex items-center w-full px-4 py-2 text-start text-sm leading-5 text-gray-700 transition duration-150 ease-in-out hover:bg-gray-50 focus:bg-gray-50 focus:outline-none ' +
                 className
             }
         >
