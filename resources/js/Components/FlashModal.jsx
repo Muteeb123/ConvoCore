@@ -1,15 +1,16 @@
-import { useEffect, useState } from 'react';
-import Modal from '@/Components/Modal';
+import { useEffect } from 'react';
 import { usePage } from '@inertiajs/react';
-import PrimaryButton from '@/Components/PrimaryButton';
+import { useToast } from '@/hooks/use-toast';
 
 export default function FlashModal() {
     const flash = usePage().props.flash || {};
-    const [show, setShow] = useState(false);
+    const { toast } = useToast();
 
     useEffect(() => {
-        if (flash.success || flash.error) {
-            setShow(true);
+        if (flash.success) {
+            toast({ title: 'Success', description: flash.success });
+        } else if (flash.error) {
+            toast({ title: 'Error', description: flash.error, variant: 'destructive' });
         }
     }, [flash.success, flash.error]);
 
@@ -47,31 +48,5 @@ export default function FlashModal() {
         return 'text-gray-900';
     };
 
-    return (
-        <Modal show={show} onClose={() => setShow(false)} maxWidth="md">
-            <div className="p-6">
-                <div className="sm:flex sm:items-start">
-                    {getIcon()}
-                    <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
-                        <h3 className={`text-lg leading-6 font-medium ${getTitleColor()}`}>
-                            {getTitle()}
-                        </h3>
-                        <div className="mt-2">
-                            <p className="text-sm text-gray-600">
-                                {flash.success || flash.error}
-                            </p>
-                        </div>
-                    </div>
-                </div>
-                <div className="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
-                    <PrimaryButton
-                        onClick={() => setShow(false)}
-                        className="w-full sm:w-auto sm:text-sm"
-                    >
-                        Close
-                    </PrimaryButton>
-                </div>
-            </div>
-        </Modal>
-    );
+    return null;
 }

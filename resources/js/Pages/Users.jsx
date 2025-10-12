@@ -2,9 +2,9 @@ import { useState, useEffect } from 'react';
 import { useForm } from '@inertiajs/react';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 import { Head, Link } from '@inertiajs/react';
-import PrimaryButton from '@/Components/PrimaryButton';
-import SecondaryButton from '@/Components/SecondaryButton';
-import Modal from '@/Components/Modal';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 export default function Users({ auth, users, roles: initialRoles, permissions }) {
     const [showRoleModal, setShowRoleModal] = useState(false);
@@ -115,55 +115,53 @@ export default function Users({ auth, users, roles: initialRoles, permissions })
                         <div className="flex justify-between mb-4">
                             <h2 className="text-lg font-semibold">Users</h2>
                             {(auth?.user?.role_id === 0 || auth?.user?.role_id == null) && (
-                                <PrimaryButton onClick={() => setShowAddModal(true)}>
+                                <Button onClick={() => setShowAddModal(true)}>
                                     Add User
-                                </PrimaryButton>
+                                </Button>
                             )}
                         </div>
 
                         {/* Users Table */}
                         <div className="overflow-x-auto">
-                            <table className="min-w-full border border-gray-200">
-                                <thead className="bg-gray-100">
-                                    <tr>
-                                        <th className="px-4 py-2 border">ID</th>
-                                        <th className="px-4 py-2 border">Name</th>
-                                        <th className="px-4 py-2 border">Email</th>
-                                        <th className="px-4 py-2 border">Role</th>
-                                        <th className="px-4 py-2 border">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
+                            <Table>
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead>ID</TableHead>
+                                        <TableHead>Name</TableHead>
+                                        <TableHead>Email</TableHead>
+                                        <TableHead>Role</TableHead>
+                                        <TableHead>Actions</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
                                     {users.data.map((user) => (
-                                        <tr key={user.id} className="text-center">
-                                            <td className="px-4 py-2 border">{user.id}</td>
-                                            <td className="px-4 py-2 border">{user.name}</td>
-                                            <td className="px-4 py-2 border">{user.email}</td>
-                                            <td className="px-4 py-2 border">{user.role?.name ?? 'N/A'}</td>
-                                            <td className="px-4 py-2 border">
-                                                <SecondaryButton onClick={() => openRoleModal(user)}>
-                                                    View Role
-                                                </SecondaryButton>
+                                        <TableRow key={user.id}>
+                                            <TableCell>{user.id}</TableCell>
+                                            <TableCell>{user.name}</TableCell>
+                                            <TableCell>{user.email}</TableCell>
+                                            <TableCell>{user.role?.name ?? 'N/A'}</TableCell>
+                                            <TableCell>
+                                                <Button variant="secondary" onClick={() => openRoleModal(user)}>View Role</Button>
                                                 {auth?.user?.role_id === 0 && auth?.user?.id !== user.id && (
-                                                    <Link
-                                                        as="button"
-                                                        method="delete"
-                                                        href={route('users.destroy', user.id)}
-                                                        onClick={(e) => {
-                                                            if (!confirm(`Delete user ${user.email}? This action cannot be undone.`)) {
-                                                                e.preventDefault();
-                                                            }
-                                                        }}
-                                                        className="ml-2"
-                                                    >
-                                                        <SecondaryButton>Delete</SecondaryButton>
-                                                    </Link>
+                                                    <Button asChild variant="destructive" className="ml-2">
+                                                        <Link
+                                                            method="delete"
+                                                            href={route('users.destroy', user.id)}
+                                                            onClick={(e) => {
+                                                                if (!confirm(`Delete user ${user.email}? This action cannot be undone.`)) {
+                                                                    e.preventDefault();
+                                                                }
+                                                            }}
+                                                        >
+                                                            Delete
+                                                        </Link>
+                                                    </Button>
                                                 )}
-                                            </td>
-                                        </tr>
+                                            </TableCell>
+                                        </TableRow>
                                     ))}
-                                </tbody>
-                            </table>
+                                </TableBody>
+                            </Table>
                         </div>
 
                         {/* Pagination */}
@@ -185,42 +183,42 @@ export default function Users({ auth, users, roles: initialRoles, permissions })
             </div>
 
             {/* Role Modal */}
-            <Modal show={showRoleModal} onClose={() => setShowRoleModal(false)} maxWidth="md">
-                <div className="p-6">
-                    <h3 className="text-xl font-semibold mb-5 text-gray-800">
-                        {selectedUser?.name}'s Permissions
-                    </h3>
-
-                    {selectedUser?.role?.permissions?.length ? (
-                        <div className="flex flex-wrap gap-2 mb-4">
-                            {selectedUser.role.permissions.map((perm, idx) => (
-                                <span
-                                    key={idx}
-                                    className="bg-indigo-100 text-indigo-800 text-sm px-3 py-1 rounded-full"
-                                >
-                                    {perm}
-                                </span>
-                            ))}
-                        </div>
-                    ) : (
-                        <p className="text-gray-500 mb-4">No permissions assigned.</p>
-                    )}
-
-                    <div className="flex justify-end">
-                        <SecondaryButton onClick={() => setShowRoleModal(false)}>
-                            Close
-                        </SecondaryButton>
-                    </div>
-                </div>
-            </Modal>
+            {showRoleModal && (
+                <Dialog open={showRoleModal} onOpenChange={setShowRoleModal}>
+                    <DialogContent>
+                        <DialogHeader>
+                            <DialogTitle>{selectedUser?.name}'s Permissions</DialogTitle>
+                        </DialogHeader>
+                        {selectedUser?.role?.permissions?.length ? (
+                            <div className="flex flex-wrap gap-2 mb-4">
+                                {selectedUser.role.permissions.map((perm, idx) => (
+                                    <span
+                                        key={idx}
+                                        className="bg-primary/10 text-primary text-sm px-3 py-1 rounded-full"
+                                    >
+                                        {perm}
+                                    </span>
+                                ))}
+                            </div>
+                        ) : (
+                            <p className="text-muted-foreground mb-4">No permissions assigned.</p>
+                        )}
+                        <DialogFooter>
+                            <Button variant="secondary" onClick={() => setShowRoleModal(false)}>Close</Button>
+                        </DialogFooter>
+                    </DialogContent>
+                </Dialog>
+            )}
 
 
             {/* Add User Modal */}
-            <Modal show={showAddModal} onClose={() => setShowAddModal(false)} maxWidth="md">
-                <div className="p-6">
-                    <h3 className="text-xl font-semibold mb-6 text-gray-900">Add New User</h3>
-
-                    <form className="space-y-5" onSubmit={submitNewUser}>
+            {showAddModal && (
+                <Dialog open={showAddModal} onOpenChange={setShowAddModal}>
+                    <DialogContent>
+                        <DialogHeader>
+                            <DialogTitle>Add New User</DialogTitle>
+                        </DialogHeader>
+                        <form className="space-y-5" onSubmit={submitNewUser}>
                         {/* Name */}
                         <div className="flex flex-col">
                             <label className="text-sm font-medium text-gray-700 mb-1">Name (optional)</label>
@@ -263,44 +261,48 @@ export default function Users({ auth, users, roles: initialRoles, permissions })
                                         </option>
                                     ))}
                                 </select>
-                                <PrimaryButton
+                                <Button
                                     type="button"
                                     onClick={() => setShowCreateRoleModal(true)}
                                     className="whitespace-nowrap px-4 py-2"
                                 >
                                     Create New Role
-                                </PrimaryButton>
+                                </Button>
                             </div>
                             {errors.role_id && <div className="text-sm text-red-600 mt-1">{errors.role_id}</div>}
                         </div>
 
                         {/* Buttons */}
                         <div className="flex justify-end gap-3 pt-4">
-                            <SecondaryButton
+                            <Button
                                 type="button"
+                                variant="secondary"
                                 onClick={() => setShowAddModal(false)}
                                 className="px-4 py-2"
                             >
                                 Cancel
-                            </SecondaryButton>
-                            <PrimaryButton
+                            </Button>
+                            <Button
                                 type="submit"
                                 disabled={processing}
                                 className="px-4 py-2"
                             >
                                 {processing ? 'Saving...' : 'Save'}
-                            </PrimaryButton>
+                            </Button>
                         </div>
-                    </form>
-                </div>
-            </Modal>
+                        </form>
+                    </DialogContent>
+                </Dialog>
+            )}
 
             {/* Create Role Modal */}
-            <Modal show={showCreateRoleModal} onClose={() => setShowCreateRoleModal(false)} maxWidth="md">
-                <div className="p-6">
-                    <h3 className="text-xl font-semibold mb-5 text-gray-800">Create New Role</h3>
-
-                    <form className="space-y-5" onSubmit={submitNewRole}>
+            {showCreateRoleModal && (
+                <Dialog open={showCreateRoleModal} onOpenChange={setShowCreateRoleModal}>
+                    <DialogContent>
+                        <DialogHeader>
+                            <DialogTitle>Create New Role</DialogTitle>
+                        </DialogHeader>
+                        <form className="space-y-5" onSubmit={submitNewRole}>
                         {/* Role Name */}
                         <div className="flex flex-col">
                             <label className="text-sm font-medium text-gray-700 mb-1">Role Name</label>
@@ -341,16 +343,17 @@ export default function Users({ auth, users, roles: initialRoles, permissions })
 
                         {/* Buttons */}
                         <div className="flex justify-end space-x-3 mt-4">
-                            <SecondaryButton type="button" onClick={() => setShowCreateRoleModal(false)}>
+                            <Button type="button" variant="secondary" onClick={() => setShowCreateRoleModal(false)}>
                                 Cancel
-                            </SecondaryButton>
-                            <PrimaryButton type="submit" disabled={!newRoleName || duplicateRole}>
+                            </Button>
+                            <Button type="submit" disabled={!newRoleName || duplicateRole}>
                                 Create
-                            </PrimaryButton>
+                            </Button>
                         </div>
-                    </form>
-                </div>
-            </Modal>
+                        </form>
+                    </DialogContent>
+                </Dialog>
+            )}
 
         </AuthenticatedLayout>
     );

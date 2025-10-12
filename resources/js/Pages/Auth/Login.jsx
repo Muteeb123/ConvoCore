@@ -1,8 +1,7 @@
-import Checkbox from '@/Components/Checkbox';
-import InputError from '@/Components/InputError';
-import InputLabel from '@/Components/InputLabel';
-import PrimaryButton from '@/Components/PrimaryButton';
-import TextInput from '@/Components/TextInput';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Button } from '@/components/ui/button';
 import GuestLayout from '@/Layouts/GuestLayout';
 import { Head, Link, useForm } from '@inertiajs/react';
 
@@ -39,50 +38,46 @@ export default function Login({ status, canResetPassword, error }) {
 
             <form onSubmit={submit}>
                 <div>
-                    <InputLabel htmlFor="email" value="Email" />
-
-                    <TextInput
+                    <Label htmlFor="email">Email</Label>
+                    <Input
                         id="email"
                         type="email"
                         name="email"
                         value={data.email}
-                        className="mt-1 block w-full"
+                        className="mt-1"
                         autoComplete="username"
-                        isFocused={true}
+                        autoFocus
                         onChange={(e) => setData('email', e.target.value)}
                     />
-
-                    <InputError message={errors.email} className="mt-2" />
+                    {errors.email && (
+                        <div className="mt-2 text-sm text-red-600">{errors.email}</div>
+                    )}
                 </div>
 
                 <div className="mt-4">
-                    <InputLabel htmlFor="password" value="Password" />
-
-                    <TextInput
+                    <Label htmlFor="password">Password</Label>
+                    <Input
                         id="password"
                         type="password"
                         name="password"
                         value={data.password}
-                        className="mt-1 block w-full"
+                        className="mt-1"
                         autoComplete="current-password"
                         onChange={(e) => setData('password', e.target.value)}
                     />
-
-                    <InputError message={errors.password} className="mt-2" />
+                    {errors.password && (
+                        <div className="mt-2 text-sm text-red-600">{errors.password}</div>
+                    )}
                 </div>
 
                 <div className="mt-4 block">
-                    <label className="flex items-center">
+                    <label className="flex items-center space-x-2">
                         <Checkbox
-                            name="remember"
+                            id="remember"
                             checked={data.remember}
-                            onChange={(e) =>
-                                setData('remember', e.target.checked)
-                            }
+                            onCheckedChange={(checked) => setData('remember', Boolean(checked))}
                         />
-                        <span className="ms-2 text-sm text-gray-600">
-                            Remember me
-                        </span>
+                        <span className="text-sm text-foreground">Remember me</span>
                     </label>
                 </div>
 
@@ -96,9 +91,9 @@ export default function Login({ status, canResetPassword, error }) {
                         </Link>
                     )}
 
-                    <PrimaryButton className="ms-4" disabled={processing}>
+                    <Button className="ms-4" disabled={processing}>
                         Log in
-                    </PrimaryButton>
+                    </Button>
                 </div>
             </form>
 

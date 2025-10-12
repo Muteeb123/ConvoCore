@@ -1,8 +1,6 @@
-import InputError from '@/Components/InputError';
-import InputLabel from '@/Components/InputLabel';
-import PrimaryButton from '@/Components/PrimaryButton';
-import TextInput from '@/Components/TextInput';
-import { Transition } from '@headlessui/react';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Button } from '@/components/ui/button';
 import { Link, useForm, usePage } from '@inertiajs/react';
 
 export default function UpdateProfileInformation({
@@ -38,35 +36,35 @@ export default function UpdateProfileInformation({
 
             <form onSubmit={submit} className="mt-6 space-y-6">
                 <div>
-                    <InputLabel htmlFor="name" value="Name" />
-
-                    <TextInput
+                    <Label htmlFor="name">Name</Label>
+                    <Input
                         id="name"
-                        className="mt-1 block w-full"
+                        className="mt-1"
                         value={data.name}
                         onChange={(e) => setData('name', e.target.value)}
                         required
-                        isFocused
+                        autoFocus
                         autoComplete="name"
                     />
-
-                    <InputError className="mt-2" message={errors.name} />
+                    {errors.name && (
+                        <div className="mt-2 text-sm text-destructive">{errors.name}</div>
+                    )}
                 </div>
 
                 <div>
-                    <InputLabel htmlFor="email" value="Email" />
-
-                    <TextInput
+                    <Label htmlFor="email">Email</Label>
+                    <Input
                         id="email"
                         type="email"
-                        className="mt-1 block w-full"
+                        className="mt-1"
                         value={data.email}
                         onChange={(e) => setData('email', e.target.value)}
                         required
                         autoComplete="username"
                     />
-
-                    <InputError className="mt-2" message={errors.email} />
+                    {errors.email && (
+                        <div className="mt-2 text-sm text-destructive">{errors.email}</div>
+                    )}
                 </div>
 
                 {mustVerifyEmail && user.email_verified_at === null && (
@@ -77,7 +75,7 @@ export default function UpdateProfileInformation({
                                 href={route('verification.send')}
                                 method="post"
                                 as="button"
-                                className="rounded-md text-sm text-gray-600 underline hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+                                className="rounded-md text-sm underline text-primary"
                             >
                                 Click here to re-send the verification email.
                             </Link>
@@ -93,19 +91,10 @@ export default function UpdateProfileInformation({
                 )}
 
                 <div className="flex items-center gap-4">
-                    <PrimaryButton disabled={processing}>Save</PrimaryButton>
-
-                    <Transition
-                        show={recentlySuccessful}
-                        enter="transition ease-in-out"
-                        enterFrom="opacity-0"
-                        leave="transition ease-in-out"
-                        leaveTo="opacity-0"
-                    >
-                        <p className="text-sm text-gray-600">
-                            Saved.
-                        </p>
-                    </Transition>
+                    <Button disabled={processing}>Save</Button>
+                    {recentlySuccessful && (
+                        <p className="text-sm text-muted-foreground">Saved.</p>
+                    )}
                 </div>
             </form>
         </section>
