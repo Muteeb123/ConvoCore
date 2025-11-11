@@ -1,0 +1,1702 @@
+"use client";
+
+import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import ZoomVideo, {
+  type VideoClient,
+  VideoQuality,
+  type VideoPlayer,
+} from "@zoom/videosdk";
+import { CameraButton, MicButton } from "./MuteButtons";
+import { 
+  PhoneOff, 
+  Link as LinkIcon, 
+  Users, 
+  X, 
+  Maximize2, 
+  Minimize2, 
+  Loader2, 
+  Monitor, 
+  AlertCircle,
+  MessageSquare,
+  Send,
+  Hand,
+  Smile,
+  Circle,
+  Settings,
+  Video,
+  Grid3x3,
+  User,
+  Download,
+  Upload,
+  Image as ImageIcon,
+  PenTool,
+  Eraser,
+  Save
+} from "lucide-react";
+import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import { Skeleton } from "./ui/skeleton";
+import { useMeetingStore } from "@/stores/useMeetingStore";
+import { useToast } from "@/hooks/use-toast";
+
+export interface VideochatProps { slug: string; JWT: string; isHost: boolean }
+
+const Videochat = (props: VideochatProps) => {
+  const session = props.slug;
+  const jwt = props.JWT;
+  const isHost = props.isHost;
+  const { toast } = useToast();
+
+  const [inSession, setInSession] = useState(false);
+  const [isJoining, setIsJoining] = useState(false);
+  const [isSharingScreen, setIsSharingScreen] = useState(false);
+  const client = useRef<typeof VideoClient>(ZoomVideo.createClient());
+  const [isVideoMuted, setIsVideoMuted] = useState(!client.current.getCurrentUserInfo()?.bVideoOn);
+  const [isAudioMuted, setIsAudioMuted] = useState(client.current.getCurrentUserInfo()?.muted ?? true);
+
+  // Containers & state
+  const videoContainerRef = useRef<HTMLDivElement>(null);
+  const shareContainerRef = useRef<HTMLDivElement>(null);
+  const shareVideoRef = useRef<HTMLVideoElement>(null);
+  const videoTilesRef = useRef<Map<number, HTMLDivElement>>(new Map());
+
+  const [participants, setParticipants] = useState<{ userId: number; displayName: string; handRaised?: boolean }[]>([]);
+  const { setup, clear, remainingSeconds } = useMeetingStore();
+
+  // Screen share state
+  const [shareState, setShareState] = useState<{ userId: number | null; isLocal: boolean }>({ userId: null, isLocal: false });
+  const [isScreenShareFullscreen, setIsScreenShareFullscreen] = useState(false);
+  const [isScreenSharePanelOpen, setIsScreenSharePanelOpen] = useState(false);
+
+  // Chat state
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState<{ userId: number; userName: string; message: string; timestamp: number }[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // Reactions state
+  const [reactions, setReactions] = useState<{ userId: number; emoji: string; id: string }[]>([]);
+  
+  // Hand raise state
+  const [handRaised, setHandRaised] = useState(false);
+  const [raisedHands, setRaisedHands] = useState<Set<number>>(new Set());
+
+  // Recording state
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+
+  // View mode state
+  const [viewMode, setViewMode] = useState<"gallery" | "speaker">("gallery");
+  const [pinnedUser, setPinnedUser] = useState<number | null>(null);
+
+  // Settings state
+  const [showSettings, setShowSettings] = useState(false);
+  const [videoQuality, setVideoQuality] = useState<"360p" | "720p" | "1080p">("720p");
+
+  // Whiteboard state
+  const [showWhiteboard, setShowWhiteboard] = useState(false);
+  const whiteboardCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [drawColor, setDrawColor] = useState("#000000");
+  const [drawTool, setDrawTool] = useState<"pen" | "eraser">("pen");
+
+  // Virtual background state
+  const [virtualBgEnabled, setVirtualBgEnabled] = useState(false);
+  const [blurEnabled, setBlurEnabled] = useState(false);
+
+  // Picture-in-picture state
+  const [isPipMode, setIsPipMode] = useState(false);
+
+  const baseUrl = useMemo(() => window.location.origin, []);
+  const internalLink = useMemo(() => `${baseUrl}/call/${encodeURIComponent(session)}`, [baseUrl, session]);
+  const externalLink = useMemo(() => `${baseUrl}/call/guest/${encodeURIComponent(session)}`, [baseUrl, session]);
+
+  const copy = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast({
+        title: "Link copied",
+        description: "Meeting link has been copied to clipboard",
+      });
+    } catch {
+      toast({
+        title: "Failed to copy",
+        description: "Could not copy link to clipboard",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const refreshParticipants = () => {
+    try {
+      const list = (client.current as any).getAllUser?.();
+      const mapped = (list || []).map((u: any) => ({ userId: u.userId, displayName: u.displayName || `User-${u.userId}` }));
+      setParticipants(mapped);
+    } catch {}
+  };
+
+  const joinSession = async () => {
+    setIsJoining(true);
+    try {
+      console.log("🔵 [JOIN SESSION] Initializing Zoom client...");
+
+      // Initialize with options to reduce external logging
+      await client.current.init("en-US", "Global", {
+        leaveOnPageUnload: true,
+      });
+
+      console.log("✅ [JOIN SESSION] Zoom client initialized successfully");
+    } catch (error) {
+      console.error("❌ [JOIN SESSION] Initialization error:", error);
+      toast({
+        title: "Failed to initialize",
+        description: "Could not initialize video client",
+        variant: "destructive",
+      });
+      setIsJoining(false);
+      return;
+    }
+
+    // Video events
+    client.current.on("peer-video-state-change", renderVideo);
+    console.log("📍 [JOIN SESSION] Video state change listener registered");
+
+    // Connection / session end handling
+    try {
+      const anyClient: any = client.current as any;
+      if (typeof anyClient.on === "function") {
+        anyClient.on("connection-change", (payload: any) => {
+          console.log("🔗 [CONNECTION CHANGE]", payload);
+          if (payload?.state === "Closed" || payload?.reason === "ended_by_host") {
+            if (isHost) {
+              window.location.href = "/";
+            } else {
+              const isGuestPath = window.location.pathname.startsWith("/call/guest/");
+              window.location.href = isGuestPath ? "/guest-thanks" : "/";
+            }
+          }
+        });
+        anyClient.on("session-closed", () => {
+          console.log("❌ [SESSION CLOSED] Session ended");
+          if (isHost) {
+            window.location.href = "/";
+          } else {
+            const isGuestPath = window.location.pathname.startsWith("/call/guest/");
+            window.location.href = isGuestPath ? "/guest-thanks" : "/";
+          }
+        });
+        // Screen share events
+        const onActiveShareChange = async (payload: any) => {
+          console.log("📺 [ACTIVE SHARE CHANGE] Event received:", payload);
+          const mediaStream = client.current.getMediaStream();
+
+          if (payload?.state === "Started" && payload?.userId) {
+            const isLocal = payload.userId === client.current.getCurrentUserInfo()?.userId;
+            console.log(`📺 [SHARE STARTED] User: ${payload.userId}, IsLocal: ${isLocal}`);
+
+            setShareState({ userId: payload.userId, isLocal });
+            setIsScreenSharePanelOpen(true); // Auto-expand panel when sharing starts
+
+            // Ensure screen share viewing starts immediately
+            console.log("📺 [SHARE EVENT] Screen sharing started by user:", payload.userId, "isLocal:", isLocal);
+            if (!isLocal) {
+              console.log("📺 [SHARE VIEW] Starting view for remote user:", payload.userId);
+              // Delay viewing start slightly to ensure content is available
+              setTimeout(async () => {
+                try {
+                  await startShareViewForUser(payload.userId);
+                } catch (viewError) {
+                  console.error("❌ [SHARE VIEW] Failed to start viewing:", viewError);
+                  // Retry after another delay
+                  setTimeout(async () => {
+                    try {
+                      console.log("📺 [SHARE VIEW] Retrying view for user:", payload.userId);
+                      await startShareViewForUser(payload.userId);
+                    } catch (retryError) {
+                      console.error("❌ [SHARE VIEW] Retry also failed:", retryError);
+                    }
+                  }, 2000);
+                }
+              }, 1000);
+            } else {
+              console.log("📺 [SHARE LOCAL] Local user started sharing - no viewing needed");
+            }
+
+          } else if (payload?.state === "Stopped") {
+            console.log("📺 [SHARE STOPPED] Screen share ended");
+            try {
+              console.log("📺 [SHARE CLEANUP] Calling stopShareView...");
+              await mediaStream.stopShareView();
+            } catch (e) {
+              console.warn("⚠️ [SHARE CLEANUP] Error stopping share view:", e);
+            }
+            setShareState({ userId: null, isLocal: false });
+            setIsScreenShareFullscreen(false);
+            setIsScreenSharePanelOpen(false); // Close panel when sharing stops
+            console.log("✅ [SHARE CLEANUP] Completed");
+          }
+        };
+        anyClient.on?.("active-share-change", onActiveShareChange);
+        console.log("📍 [JOIN SESSION] Active share change listener registered");
+        
+        const mediaStream = client.current.getMediaStream() as any;
+        if (mediaStream && typeof mediaStream.on === "function") {
+          mediaStream.on?.("active-share-change", onActiveShareChange);
+          console.log("📍 [JOIN SESSION] Media stream share change listener registered");
+        }
+      }
+    } catch (e) {
+      console.error("❌ [JOIN SESSION] Error setting up event listeners:", e);
+    }
+
+    client.current.on("user-added", refreshParticipants);
+    client.current.on("user-removed", refreshParticipants);
+    console.log("📍 [JOIN SESSION] User added/removed listeners registered");
+
+    console.log(`🔐 [JOIN SESSION] Joining session: ${session}`);
+    await client.current.join(session, jwt, userName).catch((e) => console.log("❌ [JOIN SESSION] Join error:", e));
+    setInSession(true);
+    console.log("✅ [JOIN SESSION] Successfully joined session");
+    
+    refreshParticipants();
+
+    // 30-min timer with redirect
+    console.log("⏱️ [JOIN SESSION] Starting 30-minute timer...");
+    await setup(session, isHost, () => {
+      console.log("⏰ [TIMER] 30-minute session time reached");
+      if (isHost) {
+        window.location.href = "/";
+      } else {
+        const isGuestPath = window.location.pathname.startsWith("/call/guest/");
+        window.location.href = isGuestPath ? "/guest-thanks" : "/";
+      }
+    });
+
+    const mediaStream = client.current.getMediaStream();
+    console.log("🔊 [MEDIA STREAM] Starting audio...");
+    await mediaStream.startAudio();
+    setIsAudioMuted(mediaStream.isAudioMuted());
+    console.log(`🔊 [MEDIA STREAM] Audio started, muted: ${mediaStream.isAudioMuted()}`);
+    
+    console.log("🎥 [MEDIA STREAM] Starting video...");
+    await mediaStream.startVideo();
+    const isVideoCapturing = mediaStream.isCapturingVideo();
+    setIsVideoMuted(!isVideoCapturing);
+    console.log(`🎥 [MEDIA STREAM] Video started, capturing: ${isVideoCapturing}`);
+
+    // Attach self video
+    console.log("👤 [VIDEO RENDER] Rendering self video...");
+    await renderVideo({ action: "Start", userId: client.current.getCurrentUserInfo().userId });
+    console.log("✅ [JOIN SESSION] Session setup complete");
+    setIsJoining(false);
+  };
+
+
+  const renderVideo = async (event: { action: "Start" | "Stop"; userId: number }) => {
+    const mediaStream = client.current.getMediaStream();
+    if (event.action === "Stop") {
+      try {
+        const element = await mediaStream.detachVideo(event.userId);
+        Array.isArray(element) ? element.forEach((el) => el.remove()) : element.remove?.();
+      } catch {}
+      const tile = videoTilesRef.current.get(event.userId);
+      if (tile && tile.parentElement) tile.parentElement.removeChild(tile);
+      videoTilesRef.current.delete(event.userId);
+      return;
+    }
+
+    // Start -> create video element and attach
+    try {
+      console.log(`🎥 [RENDER VIDEO] Rendering video for user: ${event.userId}`);
+
+      // Create video element with proper attributes for WebCodecs
+      const videoEl = document.createElement("video");
+      videoEl.style.width = "100%";
+      videoEl.style.height = "100%";
+      videoEl.style.objectFit = "cover";
+      videoEl.autoplay = true;
+      videoEl.muted = true;
+      videoEl.playsInline = true;
+      videoEl.disablePictureInPicture = true;
+      videoEl.style.backgroundColor = "#000";
+
+      // Create tile container
+      const tile = document.createElement("div");
+      tile.style.position = "relative";
+      tile.style.background = "#000";
+      tile.style.borderRadius = "10px";
+      tile.style.overflow = "hidden";
+      tile.style.aspectRatio = "16/9";
+      tile.style.display = "flex";
+      tile.style.alignItems = "center";
+      tile.style.justifyContent = "center";
+      tile.style.width = "100%";
+      tile.style.height = "100%";
+
+      const label = document.createElement("div");
+      const name = participants.find(p => p.userId === event.userId)?.displayName || `User-${event.userId}`;
+      label.textContent = name;
+      label.style.position = "absolute";
+      label.style.left = "10px";
+      label.style.bottom = "10px";
+      label.style.background = "rgba(0,0,0,0.5)";
+      label.style.color = "#fff";
+      label.style.fontSize = "12px";
+      label.style.padding = "2px 6px";
+      label.style.borderRadius = "6px";
+      label.style.zIndex = "10";
+
+      tile.appendChild(videoEl);
+      tile.appendChild(label);
+
+      // IMPORTANT: Append to DOM BEFORE calling attachVideo
+      if (videoContainerRef.current) {
+        videoContainerRef.current.appendChild(tile);
+        videoTilesRef.current.set(event.userId, tile);
+      }
+
+      // Ensure the video element is properly in the DOM tree before attaching
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      // Attach the video stream - let SDK create the appropriate element (canvas or video)
+      console.log(`🎥 [RENDER VIDEO] Attaching video stream...`);
+      const streamElement = await mediaStream.attachVideo(event.userId, VideoQuality.Video_360P);
+
+      // Replace our video element with the SDK's element (could be canvas or video)
+      if (streamElement) {
+        videoEl.parentNode?.replaceChild(streamElement as HTMLElement, videoEl);
+      }
+
+      console.log(`✅ [RENDER VIDEO] Video rendered successfully for user: ${event.userId}`);
+    } catch (error) {
+      console.error(`❌ [RENDER VIDEO] Failed to render video for user ${event.userId}:`, error);
+
+      // Fallback: try without specifying video element (let SDK create canvas)
+      try {
+        console.log(`🔄 [RENDER VIDEO] Fallback: trying without video element...`);
+        const canvasEl = await mediaStream.attachVideo(event.userId, VideoQuality.Video_360P);
+
+        // Create tile for canvas fallback
+        const tile = document.createElement("div");
+        tile.style.position = "relative";
+        tile.style.background = "#000";
+        tile.style.borderRadius = "10px";
+        tile.style.overflow = "hidden";
+        tile.style.aspectRatio = "16/9";
+        tile.style.display = "flex";
+        tile.style.alignItems = "center";
+        tile.style.justifyContent = "center";
+        tile.style.width = "100%";
+        tile.style.height = "100%";
+
+        const label = document.createElement("div");
+        const name = participants.find(p => p.userId === event.userId)?.displayName || `User-${event.userId}`;
+        label.textContent = name;
+        label.style.position = "absolute";
+        label.style.left = "10px";
+        label.style.bottom = "10px";
+        label.style.background = "rgba(0,0,0,0.5)";
+        label.style.color = "#fff";
+        label.style.fontSize = "12px";
+        label.style.padding = "2px 6px";
+        label.style.borderRadius = "6px";
+        label.style.zIndex = "10";
+
+        if (canvasEl && videoContainerRef.current) {
+          tile.appendChild(canvasEl as HTMLElement);
+          tile.appendChild(label);
+          videoContainerRef.current.appendChild(tile);
+          videoTilesRef.current.set(event.userId, tile);
+          console.log(`✅ [RENDER VIDEO] Fallback canvas rendering successful for user: ${event.userId}`);
+        }
+      } catch (fallbackError) {
+        console.error(`❌ [RENDER VIDEO] Fallback also failed for user ${event.userId}:`, fallbackError);
+      }
+    }
+  };
+
+  const removeParticipant = async (userId: number) => {
+    try {
+      const anyClient: any = client.current as any;
+      if (typeof anyClient.kickUser === "function") {
+        await anyClient.kickUser(userId);
+      } else if (typeof anyClient.expelUser === "function") {
+        await anyClient.expelUser(userId);
+      } else {
+        console.warn("Kick/Expel method not found in this SDK version");
+      }
+      refreshParticipants();
+    } catch (e) {
+      console.error("Failed to remove participant", e);
+    }
+  };
+
+  const startShare = async () => {
+    if (isSharingScreen) {
+      toast({
+        title: "Already sharing",
+        description: "Please stop the current share first",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      const mediaStream = client.current.getMediaStream();
+
+      if (!mediaStream) {
+        throw new Error("Media stream not available");
+      }
+
+      console.log("🎬 Starting screen share with WebCodecs...");
+
+      // For WebCodecs, we need to ensure we have a proper video element
+      // The SDK will handle the screen capture internally
+      const videoElement = document.createElement('video');
+      videoElement.autoplay = true;
+      videoElement.muted = true;
+      videoElement.playsInline = true;
+      videoElement.setAttribute('playsinline', 'true');
+      
+      // Don't add to DOM yet - let SDK handle it
+      console.log("📺 Created video element for screen share");
+
+      // Call startShareScreen with the video element
+      // The SDK will populate it with the screen capture stream
+      await (mediaStream as any).startShareScreen(videoElement);
+      
+      console.log("✅ Screen share started successfully");
+      setIsSharingScreen(true);
+      
+      toast({
+        title: "Screen sharing started",
+        description: "Your screen is now being shared",
+      });
+      
+    } catch (e: any) {
+      setIsSharingScreen(false);
+      console.error("❌ Screen share error:", e);
+      
+      let errorMessage = "Failed to start screen share";
+      
+      if (e?.name === "NotAllowedError") {
+        errorMessage = "Screen share permission denied";
+      } else if (e?.name === "NotSupportedError") {
+        errorMessage = "Screen sharing not supported in this browser";
+      } else if (e?.name === "NotFoundError") {
+        errorMessage = "No screen available to share";
+      } else if (e?.name === "AbortError") {
+        errorMessage = "Screen share was cancelled";
+      } else if (e?.type === "INVALID_PARAMETERS") {
+        errorMessage = `SDK Error: ${e.reason || e.message}`;
+      } else if (e?.message) {
+        errorMessage = e.message;
+      }
+      
+      toast({
+        title: "Screen share failed",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Helper function to start screen share viewing for a specific user
+  const startShareViewForUser = async (userId: number) => {
+    const container = shareContainerRef.current;
+    const video = shareVideoRef.current;
+    if (!container || !video) {
+      console.error("📺 [SHARE VIEW] Container or video ref not available");
+      return;
+    }
+
+    const mediaStream = client.current.getMediaStream() as any;
+    console.log(`📺 [SHARE VIEW] Attempting to view screen share from user: ${userId}`);
+
+    try {
+      // Use the proper Zoom SDK method to start viewing the shared screen
+      console.log("📺 [SHARE VIEW] Starting share view...");
+      await mediaStream.startShareView(video as any, userId);
+      console.log("✅ [SHARE VIEW] Share view started successfully");
+    } catch (error) {
+      console.error("❌ [SHARE VIEW] Failed to start share view:", error);
+      
+      // Fallback: Try to render as a video stream
+      try {
+        console.log("📺 [SHARE VIEW] Fallback: trying renderVideo for share...");
+        const shareElement = await mediaStream.attachVideo(userId, VideoQuality.Video_720P);
+        
+        if (shareElement) {
+          container.innerHTML = "";
+        container.appendChild(shareElement as any);
+          console.log("✅ [SHARE VIEW] Share rendered as video stream");
+        }
+      } catch (fallbackError) {
+        console.error("❌ [SHARE VIEW] All viewing methods failed:", fallbackError);
+      }
+    }
+  };
+
+  const stopShare = async () => {
+    try {
+      console.log("🛑 [STOP SHARE] Stopping screen share...");
+      const mediaStream = client.current.getMediaStream();
+      
+      // Stop the screen share broadcast
+      await (mediaStream as any).stopShareScreen?.();
+      console.log("✅ [STOP SHARE] Screen share broadcast stopped");
+      
+      // Stop viewing the share (cleanup the canvas/video)
+      try {
+        await mediaStream.stopShareView?.();
+        console.log("✅ [STOP SHARE] Share view stopped");
+      } catch (e) {
+        console.warn("⚠️ [STOP SHARE] Error stopping share view:", e);
+      }
+      
+      setIsSharingScreen(false);
+      setIsScreenShareFullscreen(false);
+      
+      toast({
+        title: "Screen sharing stopped",
+        description: "Your screen is no longer being shared",
+      });
+    } catch (e) {
+      console.error("❌ [STOP SHARE] Failed to stop screen share:", e);
+      toast({
+        title: "Error",
+        description: "Failed to stop screen share",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Chat functions
+  const sendChatMessage = () => {
+    if (!chatInput.trim()) return;
+    
+    const currentUser = client.current.getCurrentUserInfo();
+    const message = {
+      userId: currentUser?.userId || 0,
+      userName: currentUser?.displayName || userName,
+      message: chatInput,
+      timestamp: Date.now(),
+    };
+    
+    setChatMessages(prev => [...prev, message]);
+    setChatInput("");
+    
+    // Broadcast to other participants via command channel if available
+    try {
+      const cmdChannel = (client.current as any).getCommandClient?.();
+      cmdChannel?.send?.(JSON.stringify({ type: 'chat', data: message }));
+    } catch (e) {
+      console.log("Chat broadcast not available");
+    }
+  };
+
+  // Reaction functions
+  const sendReaction = (emoji: string) => {
+    const currentUser = client.current.getCurrentUserInfo();
+    const reaction = {
+      userId: currentUser?.userId || 0,
+      emoji,
+      id: `${Date.now()}-${Math.random()}`,
+    };
+    
+    setReactions(prev => [...prev, reaction]);
+    
+    // Remove reaction after 3 seconds
+    setTimeout(() => {
+      setReactions(prev => prev.filter(r => r.id !== reaction.id));
+    }, 3000);
+    
+    // Broadcast reaction
+    try {
+      const cmdChannel = (client.current as any).getCommandClient?.();
+      cmdChannel?.send?.(JSON.stringify({ type: 'reaction', data: reaction }));
+    } catch (e) {
+      console.log("Reaction broadcast not available");
+    }
+  };
+
+  // Hand raise functions
+  const toggleHandRaise = () => {
+    const newState = !handRaised;
+    setHandRaised(newState);
+    
+    const currentUserId = client.current.getCurrentUserInfo()?.userId;
+    if (currentUserId) {
+      const newRaisedHands = new Set(raisedHands);
+      if (newState) {
+        newRaisedHands.add(currentUserId);
+      } else {
+        newRaisedHands.delete(currentUserId);
+      }
+      setRaisedHands(newRaisedHands);
+      
+      // Broadcast hand raise state
+      try {
+        const cmdChannel = (client.current as any).getCommandClient?.();
+        cmdChannel?.send?.(JSON.stringify({ type: 'handRaise', userId: currentUserId, raised: newState }));
+      } catch (e) {
+        console.log("Hand raise broadcast not available");
+      }
+    }
+    
+    toast({
+      title: newState ? "Hand raised" : "Hand lowered",
+      description: newState ? "The host will be notified" : "Your hand has been lowered",
+    });
+  };
+
+  // Recording functions
+  const startRecording = async () => {
+    try {
+      // Get the video container element
+      const container = videoContainerRef.current;
+      if (!container) {
+        throw new Error("Video container not found");
+      }
+
+      // Create a canvas to capture the meeting
+      const canvas = document.createElement('canvas');
+      canvas.width = 1920;
+      canvas.height = 1080;
+      const ctx = canvas.getContext('2d');
+      
+      if (!ctx) throw new Error("Could not get canvas context");
+
+      // Capture canvas stream
+      const canvasStream = canvas.captureStream(30);
+      
+      // Try to add audio from the meeting
+      try {
+        const mediaStream = client.current.getMediaStream();
+        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioStream.getAudioTracks().forEach(track => {
+          canvasStream.addTrack(track);
+        });
+      } catch (audioError) {
+        console.warn("Could not capture audio:", audioError);
+      }
+
+      // Set up MediaRecorder
+      const options = { mimeType: 'video/webm;codecs=vp9' };
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        options.mimeType = 'video/webm';
+      }
+
+      const mediaRecorder = new MediaRecorder(canvasStream, options);
+      recordedChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          recordedChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `meeting-${session}-${Date.now()}.webm`;
+        a.click();
+        URL.revokeObjectURL(url);
+        
+        toast({
+          title: "Recording saved",
+          description: "Your recording has been downloaded",
+        });
+      };
+
+      mediaRecorder.start(1000); // Collect data every second
+      mediaRecorderRef.current = mediaRecorder;
+      setIsRecording(true);
+
+      // Draw video frames to canvas
+      const drawFrame = () => {
+        if (!mediaRecorderRef.current || mediaRecorderRef.current.state !== 'recording') return;
+        
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw all video elements from the container
+        const videos = container.querySelectorAll('video, canvas');
+        videos.forEach((videoEl, index) => {
+          if (videoEl instanceof HTMLVideoElement || videoEl instanceof HTMLCanvasElement) {
+            const x = (index % 3) * 640;
+            const y = Math.floor(index / 3) * 360;
+            ctx.drawImage(videoEl as any, x, y, 640, 360);
+          }
+        });
+        
+        requestAnimationFrame(drawFrame);
+      };
+      
+      drawFrame();
+
+      toast({
+        title: "Recording started",
+        description: "Your meeting is being recorded",
+      });
+    } catch (error) {
+      console.error("Failed to start recording:", error);
+      toast({
+        title: "Recording failed",
+        description: "Could not start recording",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current = null;
+      setIsRecording(false);
+    }
+  };
+
+  // Whiteboard functions
+  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    setIsDrawing(true);
+    const canvas = whiteboardCanvasRef.current;
+    if (!canvas) return;
+    
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+  };
+
+  const draw = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isDrawing) return;
+    
+    const canvas = whiteboardCanvasRef.current;
+    if (!canvas) return;
+    
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    
+    ctx.lineTo(x, y);
+    ctx.strokeStyle = drawTool === 'eraser' ? '#FFFFFF' : drawColor;
+    ctx.lineWidth = drawTool === 'eraser' ? 20 : 2;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+  };
+
+  const stopDrawing = () => {
+    setIsDrawing(false);
+  };
+
+  const clearWhiteboard = () => {
+    const canvas = whiteboardCanvasRef.current;
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  };
+
+  const saveWhiteboard = () => {
+    const canvas = whiteboardCanvasRef.current;
+    if (!canvas) return;
+    
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `whiteboard-${Date.now()}.png`;
+      a.click();
+      URL.revokeObjectURL(url);
+      
+      toast({
+        title: "Whiteboard saved",
+        description: "Your whiteboard has been downloaded",
+      });
+    });
+  };
+
+  // Virtual Background / Blur functions
+  const toggleVirtualBackground = async () => {
+    try {
+      const mediaStream = client.current.getMediaStream() as any;
+      
+      if (!virtualBgEnabled) {
+        // Enable virtual background (if SDK supports it)
+        if (mediaStream.updateVirtualBackground) {
+          await mediaStream.updateVirtualBackground({
+            imageUrl: 'blur', // Use blur as default
+          });
+          setVirtualBgEnabled(true);
+          toast({
+            title: "Virtual background enabled",
+            description: "Background blur is now active",
+          });
+        } else {
+          toast({
+            title: "Not supported",
+            description: "Virtual background is not supported in this SDK version",
+            variant: "destructive",
+          });
+        }
+      } else {
+        // Disable virtual background
+        if (mediaStream.updateVirtualBackground) {
+          await mediaStream.updateVirtualBackground({ imageUrl: 'none' });
+          setVirtualBgEnabled(false);
+          toast({
+            title: "Virtual background disabled",
+            description: "Background blur has been removed",
+          });
+        }
+      }
+    } catch (error) {
+      console.error("Virtual background error:", error);
+      toast({
+        title: "Error",
+        description: "Failed to toggle virtual background",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const toggleBlur = async () => {
+    try {
+      const mediaStream = client.current.getMediaStream() as any;
+      
+      if (!blurEnabled) {
+        // Enable blur
+        if (mediaStream.updateVirtualBackground) {
+          await mediaStream.updateVirtualBackground({ imageUrl: 'blur' });
+          setBlurEnabled(true);
+          toast({
+            title: "Background blur enabled",
+            description: "Your background is now blurred",
+          });
+        } else {
+          toast({
+            title: "Not supported",
+            description: "Background blur is not supported in this SDK version",
+            variant: "destructive",
+          });
+        }
+      } else {
+        // Disable blur
+        if (mediaStream.updateVirtualBackground) {
+          await mediaStream.updateVirtualBackground({ imageUrl: 'none' });
+          setBlurEnabled(false);
+          toast({
+            title: "Background blur disabled",
+            description: "Background blur has been removed",
+          });
+        }
+      }
+    } catch (error) {
+      console.error("Background blur error:", error);
+      toast({
+        title: "Error",
+        description: "Failed to toggle background blur",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Picture-in-Picture function
+  const togglePictureInPicture = async () => {
+    try {
+      // Find the first video element in the container
+      const videoElement = videoContainerRef.current?.querySelector('video');
+      
+      if (!videoElement) {
+        toast({
+          title: "No video available",
+          description: "Cannot enable picture-in-picture mode",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      if (!document.pictureInPictureElement) {
+        // Enter PiP mode
+        await videoElement.requestPictureInPicture();
+        setIsPipMode(true);
+        toast({
+          title: "Picture-in-Picture enabled",
+          description: "Video is now in PiP mode",
+        });
+      } else {
+        // Exit PiP mode
+        await document.exitPictureInPicture();
+        setIsPipMode(false);
+        toast({
+          title: "Picture-in-Picture disabled",
+          description: "Returned to normal view",
+        });
+      }
+    } catch (error) {
+      console.error("Picture-in-picture error:", error);
+      toast({
+        title: "PiP not supported",
+        description: "Picture-in-picture is not available",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const leaveSession = async () => {
+    // Stop recording if active
+    if (isRecording) {
+      stopRecording();
+    }
+    
+    try { await client.current.getMediaStream().stopShareView?.(); } catch {}
+    videoTilesRef.current.forEach((tile) => tile.remove());
+    videoTilesRef.current.clear();
+
+    client.current.off("peer-video-state-change", renderVideo);
+    client.current.off("user-added", refreshParticipants);
+    client.current.off("user-removed", refreshParticipants);
+    try { (client.current as any).off?.("active-share-change"); } catch {}
+    await client.current.leave().catch((e) => console.log("leave error", e));
+    clear();
+    if (isHost) {
+      window.location.href = "/";
+    } else {
+      const isGuestPath = window.location.pathname.startsWith("/call/guest/");
+      window.location.href = isGuestPath ? "/guest-thanks" : "/";
+    }
+  };
+
+  // Auto-scroll chat to bottom
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages]);
+
+  // Initialize whiteboard
+  useEffect(() => {
+    if (showWhiteboard && whiteboardCanvasRef.current) {
+      const canvas = whiteboardCanvasRef.current;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+    }
+  }, [showWhiteboard]);
+
+  // Poll meeting state and check for active screen shares
+  useEffect(() => {
+    if (!inSession) return;
+    let timer: number | null = null;
+    const poll = async () => {
+      try {
+        // Check meeting state
+        const res = await fetch(`/api/meetings/${encodeURIComponent(session)}/state`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.ended) {
+            await leaveSession();
+            return;
+          }
+        }
+
+        // Check for active screen shares if we're not currently sharing
+        if (!shareState.userId) {
+          try {
+            const mediaStream = client.current.getMediaStream();
+            const activeShareUser = (mediaStream as any).getActiveShareUser?.();
+            if (activeShareUser && activeShareUser !== client.current.getCurrentUserInfo()?.userId) {
+              console.log("📺 [POLL] Found active screen share from user:", activeShareUser);
+              setShareState({ userId: activeShareUser, isLocal: false });
+              setIsScreenSharePanelOpen(true);
+
+              // Start viewing the share
+              setTimeout(async () => {
+                try {
+                  await startShareViewForUser(activeShareUser);
+                } catch (viewError) {
+                  console.error("❌ [POLL VIEW] Failed to start viewing:", viewError);
+                }
+              }, 500);
+            }
+          } catch (shareCheckError) {
+            // Ignore errors in share checking
+          }
+        }
+      } catch {}
+      timer = window.setTimeout(poll, 2000);
+    };
+    poll();
+    return () => { if (timer) window.clearTimeout(timer); };
+  }, [inSession, session, shareState.userId]);
+
+  // Fullscreen screen share modal
+  if (isScreenShareFullscreen && shareState.userId) {
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col bg-black">
+        <div className="flex items-center justify-between px-6 py-4 bg-gray-900 border-b border-gray-700">
+          <h1 className="text-white font-semibold">Screen Share - Full Screen</h1>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setIsScreenShareFullscreen(false)}
+            className="text-white border-white hover:bg-gray-800"
+          >
+            <Minimize2 className="h-4 w-4 mr-2" /> Exit Fullscreen
+          </Button>
+        </div>
+        <div className="flex-1 flex items-center justify-center p-4">
+          <div className="w-full h-full rounded-lg overflow-hidden">
+            <video
+              ref={shareVideoRef}
+              style={{
+                width: "100%",
+                height: "100%",
+                objectFit: "contain",
+                backgroundColor: "#000"
+              }}
+              autoPlay
+              muted
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full w-full flex-1 flex-col bg-gray-50">
+      <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-blue-600 to-purple-600 border-b shadow-md">
+        <div className="flex items-center gap-3">
+          <div className="h-10 w-10 rounded-lg bg-white/20 flex items-center justify-center">
+            <Monitor className="h-5 w-5 text-white" />
+          </div>
+          <div>
+            <h1 className="text-xl font-bold text-white">Video Session</h1>
+            <p className="text-xs text-blue-100">{session}</p>
+          </div>
+        </div>
+        {inSession && (
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="secondary" onClick={() => copy(internalLink)} title="Copy internal host link" className="bg-white/10 hover:bg-white/20 text-white border-white/20">
+              <LinkIcon className="h-4 w-4 mr-1" /> Internal
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => copy(externalLink)} title="Copy external guest link" className="bg-white/10 hover:bg-white/20 text-white border-white/20">
+              <LinkIcon className="h-4 w-4 mr-1" /> Guest
+            </Button>
+            {remainingSeconds <= 5 * 60 && (
+              <div className="ml-2 rounded-lg bg-amber-500 text-white px-3 py-1.5 text-xs font-semibold shadow-md flex items-center gap-1">
+                <AlertCircle className="h-3.5 w-3.5" />
+                Ends in {Math.floor(remainingSeconds / 60)}:{String(remainingSeconds % 60).padStart(2, "0")}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Dedicated Blue Screen Share Area */}
+      {shareState.userId && (
+        <div className="mx-4 mt-4 mb-4">
+          <div className="bg-blue-50 rounded-xl border-2 border-blue-300 overflow-hidden shadow-xl">
+            <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-blue-600 to-blue-700 border-b-2 border-blue-400">
+              <div className="flex items-center gap-3">
+                <div className="h-8 w-8 rounded-full bg-white/20 flex items-center justify-center">
+                  <Monitor className="h-5 w-5 text-white" />
+                </div>
+                <div>
+                  <span className="text-lg font-bold text-white">Screen Share Area</span>
+                  <div className="text-xs text-blue-100 mt-1">
+                    {shareState.isLocal && "🔴 You're currently sharing your screen"}
+                    {!shareState.isLocal && "👁️ Viewing shared screen"}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setIsScreenShareFullscreen(true)}
+                  title="View screen share in fullscreen"
+                  className="bg-white/10 hover:bg-white/20 text-white border-white/20"
+                >
+                  <Maximize2 className="h-4 w-4 mr-2" />
+                  Fullscreen
+                </Button>
+                {isScreenSharePanelOpen && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setIsScreenSharePanelOpen(false)}
+                    title="Minimize screen share area"
+                    className="bg-white/10 hover:bg-white/20 text-white border-white/20"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                )}
+                {!isScreenSharePanelOpen && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setIsScreenSharePanelOpen(true)}
+                    title="Expand screen share area"
+                    className="bg-white/10 hover:bg-white/20 text-white border-white/20"
+                  >
+                    <Maximize2 className="h-4 w-4 rotate-90" />
+                  </Button>
+                )}
+              </div>
+            </div>
+            {isScreenSharePanelOpen && (
+              <div
+                ref={shareContainerRef}
+                className="relative bg-blue-900"
+                style={{
+                  height: "600px",
+                  overflow: "hidden"
+                }}
+              >
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="text-center text-blue-200">
+                    <Monitor className="h-16 w-16 mx-auto mb-4 opacity-50" />
+                    <p className="text-sm">Screen sharing in progress...</p>
+                    {shareState.isLocal && (
+                      <p className="text-xs mt-2 opacity-75">Your screen is being shared with participants</p>
+                    )}
+                    {!shareState.isLocal && (
+                      <p className="text-xs mt-2 opacity-75">Viewing shared screen</p>
+                    )}
+                  </div>
+                </div>
+                <video
+                  ref={shareVideoRef}
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "contain",
+                    backgroundColor: "#1e3a8a",
+                    position: "relative",
+                    zIndex: 1
+                  }}
+                  autoPlay
+                  muted
+                  playsInline
+                  onLoadStart={() => console.log("📺 [VIDEO] Load started")}
+                  onLoadedData={() => console.log("📺 [VIDEO] Data loaded")}
+                  onError={(e) => console.error("📺 [VIDEO] Error:", e)}
+                />
+                {/* Debug info */}
+                <div className="absolute bottom-2 left-2 text-xs text-blue-300 bg-black/50 px-2 py-1 rounded">
+                  User: {shareState.userId} | Local: {shareState.isLocal ? 'Yes' : 'No'}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="flex w-full flex-1 gap-4 p-4">
+        {/* main video area */}
+        <div className="flex-1 flex flex-col gap-4">
+          {/* Participants video grid */}
+          <div className="bg-white rounded-lg border border-gray-200 overflow-hidden shadow-sm flex-1">
+            <div className="px-4 py-2 bg-gray-50 border-b">
+              <span className="text-sm font-medium text-gray-700">Participants ({participants.length})</span>
+            </div>
+            <div
+              ref={videoContainerRef}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+                gap: "12px",
+                padding: "12px",
+                backgroundColor: "#0b0b0b",
+                minHeight: "300px",
+                maxHeight: shareState.userId ? "300px" : "100%",
+                overflow: "auto"
+              }}
+            />
+            {!inSession && (
+              <div className="flex items-center justify-center h-96">
+                <div className="flex flex-col items-center gap-4">
+                  {isJoining ? (
+                    <>
+                      <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+                      <p className="text-sm text-gray-600">Joining session...</p>
+                    </>
+                  ) : (
+                    <Button 
+                      className="mb-4 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3" 
+                      onClick={joinSession} 
+                      title="join session"
+                    >
+                      Join Session
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Side panel - Participants list */}
+        {inSession && (
+          <div className="w-80 bg-white rounded-lg border border-gray-200 shadow-sm flex flex-col">
+            <div className="px-4 py-3 bg-gray-50 border-b">
+              <div className="flex items-center text-sm font-semibold text-gray-700">
+                <Users className="h-4 w-4 mr-2" /> Participants ({participants.length})
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto p-3 space-y-2">
+              {participants.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-8">
+                  <Users className="h-12 w-12 text-gray-300 mb-2" />
+                  <div className="text-xs text-gray-500 text-center">No participants yet.</div>
+                </div>
+              ) : (
+                participants.map((p) => (
+                  <div key={p.userId} className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2.5 bg-white hover:bg-gray-50 transition-all shadow-sm">
+                    <div className="flex items-center gap-2">
+                      <div className="h-8 w-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-xs font-semibold relative">
+                        {p.displayName.charAt(0).toUpperCase()}
+                        {raisedHands.has(p.userId) && (
+                          <Hand className="h-3 w-3 text-yellow-400 absolute -top-1 -right-1 animate-bounce" />
+                        )}
+                      </div>
+                      <div className="text-sm truncate font-medium text-gray-700">{p.displayName}</div>
+                    </div>
+                    {isHost && p.userId !== client.current.getCurrentUserInfo()?.userId && (
+                      <Button size="sm" variant="destructive" onClick={() => removeParticipant(p.userId)} title="Remove user" className="h-7 w-7 p-0">
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="border-t bg-gray-50 p-3 space-y-2">
+              <div className="text-xs font-semibold text-gray-700 mb-2">Quick Links</div>
+              <div className="flex items-center gap-2">
+                <Input readOnly value={internalLink} className="flex-1 text-xs" />
+                <Button size="sm" variant="secondary" onClick={() => copy(internalLink)}>Copy</Button>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input readOnly value={externalLink} className="flex-1 text-xs" />
+                <Button size="sm" variant="secondary" onClick={() => copy(externalLink)}>Copy</Button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Chat Panel */}
+      {isChatOpen && (
+        <div className="fixed right-4 bottom-24 w-96 h-96 bg-white rounded-lg shadow-2xl border border-gray-300 flex flex-col z-40">
+          <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-blue-600 to-purple-600 rounded-t-lg">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="h-5 w-5 text-white" />
+              <span className="font-semibold text-white">Chat</span>
+            </div>
+            <Button size="sm" variant="ghost" onClick={() => setIsChatOpen(false)} className="h-7 w-7 p-0 text-white hover:bg-white/20">
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+          <div className="flex-1 overflow-auto p-3 space-y-2 bg-gray-50">
+            {chatMessages.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                <MessageSquare className="h-12 w-12 mb-2" />
+                <p className="text-sm">No messages yet</p>
+              </div>
+            ) : (
+              chatMessages.map((msg, idx) => (
+                <div key={idx} className="bg-white rounded-lg p-2 shadow-sm">
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="h-6 w-6 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-xs font-semibold">
+                      {msg.userName.charAt(0).toUpperCase()}
+                    </div>
+                    <span className="text-xs font-semibold text-gray-700">{msg.userName}</span>
+                    <span className="text-xs text-gray-400 ml-auto">{new Date(msg.timestamp).toLocaleTimeString()}</span>
+                  </div>
+                  <p className="text-sm text-gray-800 ml-8">{msg.message}</p>
+                </div>
+              ))
+            )}
+            <div ref={chatEndRef} />
+          </div>
+          <div className="p-3 border-t flex gap-2">
+            <Input
+              placeholder="Type a message..."
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && sendChatMessage()}
+              className="flex-1"
+            />
+            <Button onClick={sendChatMessage} size="sm" className="bg-blue-600 hover:bg-blue-700">
+              <Send className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Reactions Overlay */}
+      {reactions.map((reaction) => (
+        <div
+          key={reaction.id}
+          className="fixed bottom-32 left-1/2 transform -translate-x-1/2 text-6xl animate-bounce pointer-events-none z-50"
+          style={{
+            animation: 'bounce 3s ease-out forwards',
+            opacity: 0.9
+          }}
+        >
+          {reaction.emoji}
+        </div>
+      ))}
+
+      {/* Whiteboard Modal */}
+      {showWhiteboard && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-2xl w-[90%] h-[90%] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-blue-600 to-purple-600 rounded-t-lg">
+              <div className="flex items-center gap-3">
+                <PenTool className="h-6 w-6 text-white" />
+                <span className="font-bold text-white text-lg">Whiteboard</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setDrawTool('pen')}
+                  className={`text-white hover:bg-white/20 ${drawTool === 'pen' ? 'bg-white/30' : ''}`}
+                >
+                  <PenTool className="h-4 w-4" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setDrawTool('eraser')}
+                  className={`text-white hover:bg-white/20 ${drawTool === 'eraser' ? 'bg-white/30' : ''}`}
+                >
+                  <Eraser className="h-4 w-4" />
+                </Button>
+                <input
+                  type="color"
+                  value={drawColor}
+                  onChange={(e) => setDrawColor(e.target.value)}
+                  className="h-8 w-12 rounded cursor-pointer"
+                />
+                <Button size="sm" variant="ghost" onClick={clearWhiteboard} className="text-white hover:bg-white/20">
+                  Clear
+                </Button>
+                <Button size="sm" variant="ghost" onClick={saveWhiteboard} className="text-white hover:bg-white/20">
+                  <Save className="h-4 w-4 mr-1" /> Save
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setShowWhiteboard(false)} className="text-white hover:bg-white/20">
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+            <div className="flex-1 flex items-center justify-center p-4 bg-gray-100">
+              <canvas
+                ref={whiteboardCanvasRef}
+                width={1600}
+                height={900}
+                className="bg-white shadow-xl cursor-crosshair rounded"
+                onMouseDown={startDrawing}
+                onMouseMove={draw}
+                onMouseUp={stopDrawing}
+                onMouseLeave={stopDrawing}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Settings Modal */}
+      {showSettings && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-2xl w-[500px] max-h-[600px] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-blue-600 to-purple-600 rounded-t-lg">
+              <div className="flex items-center gap-3">
+                <Settings className="h-6 w-6 text-white" />
+                <span className="font-bold text-white text-lg">Settings</span>
+              </div>
+              <Button size="sm" variant="ghost" onClick={() => setShowSettings(false)} className="text-white hover:bg-white/20">
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="flex-1 overflow-auto p-6 space-y-6">
+              {/* Video Quality */}
+              <div>
+                <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                  <Video className="h-5 w-5" />
+                  Video Quality
+                </h3>
+                <div className="space-y-2">
+                  {(['360p', '720p', '1080p'] as const).map((quality) => (
+                    <label key={quality} className="flex items-center gap-3 cursor-pointer hover:bg-gray-50 p-2 rounded">
+                      <input
+                        type="radio"
+                        name="videoQuality"
+                        checked={videoQuality === quality}
+                        onChange={() => setVideoQuality(quality)}
+                        className="w-4 h-4"
+                      />
+                      <span className="text-sm text-gray-700">{quality}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Video Effects */}
+              <div>
+                <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                  <ImageIcon className="h-5 w-5" />
+                  Video Effects
+                </h3>
+                <div className="space-y-2">
+                  <Button
+                    onClick={toggleBlur}
+                    variant={blurEnabled ? "default" : "outline"}
+                    className="w-full justify-start"
+                  >
+                    {blurEnabled ? "Disable" : "Enable"} Background Blur
+                  </Button>
+                  <Button
+                    onClick={toggleVirtualBackground}
+                    variant={virtualBgEnabled ? "default" : "outline"}
+                    className="w-full justify-start"
+                  >
+                    {virtualBgEnabled ? "Disable" : "Enable"} Virtual Background
+                  </Button>
+                  <Button
+                    onClick={togglePictureInPicture}
+                    variant={isPipMode ? "default" : "outline"}
+                    className="w-full justify-start"
+                  >
+                    {isPipMode ? "Exit" : "Enter"} Picture-in-Picture
+                  </Button>
+                </div>
+              </div>
+
+              {/* Information */}
+              <div>
+                <h3 className="font-semibold text-gray-800 mb-3">Session Information</h3>
+                <div className="bg-gray-50 rounded-lg p-4 space-y-2 text-sm">
+                  <p><span className="font-medium">Session ID:</span> {session}</p>
+                  <p><span className="font-medium">Participants:</span> {participants.length}</p>
+                  <p><span className="font-medium">Time remaining:</span> {Math.floor(remainingSeconds / 60)}:{String(remainingSeconds % 60).padStart(2, "0")}</p>
+                  <p><span className="font-medium">Recording:</span> {isRecording ? "Active" : "Inactive"}</p>
+                  <p><span className="font-medium">Screen sharing:</span> {shareState.userId ? "Active" : "Inactive"}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Controls footer */}
+      {inSession && (
+        <div className="bg-white border-t border-gray-200 p-4 flex gap-2 justify-center items-center shadow-xl flex-wrap">
+          {/* Basic controls */}
+          <div className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
+            <CameraButton
+              client={client}
+              isVideoMuted={isVideoMuted}
+              setIsVideoMuted={setIsVideoMuted}
+              renderVideo={renderVideo}
+            />
+            <MicButton
+              isAudioMuted={isAudioMuted}
+              client={client}
+              setIsAudioMuted={setIsAudioMuted}
+            />
+          </div>
+          
+          {/* Screen share */}
+          {!shareState.isLocal ? (
+            <Button 
+              onClick={startShare} 
+              title="Share your screen" 
+              size="sm"
+              className="bg-blue-600 hover:bg-blue-700 text-white shadow-md hover:shadow-lg transition-all duration-200"
+              disabled={isSharingScreen}
+            >
+              <Monitor className="h-4 w-4 mr-1" />
+              Share
+            </Button>
+          ) : (
+            <Button 
+              variant="destructive" 
+              size="sm"
+              onClick={stopShare} 
+              title="Stop sharing your screen"
+              className="bg-red-600 hover:bg-red-700 shadow-md hover:shadow-lg transition-all duration-200"
+            >
+              <Monitor className="h-4 w-4 mr-1" />
+              Stop
+            </Button>
+          )}
+          
+          {/* Recording */}
+          {!isRecording ? (
+            <Button 
+              onClick={startRecording} 
+              title="Start recording" 
+              size="sm"
+              variant="outline"
+              className="shadow-md hover:shadow-lg transition-all duration-200"
+            >
+              <Circle className="h-4 w-4 mr-1 text-red-600" />
+              Record
+            </Button>
+          ) : (
+            <Button 
+              onClick={stopRecording} 
+              title="Stop recording"
+              size="sm"
+              variant="destructive"
+              className="shadow-md hover:shadow-lg transition-all duration-200 animate-pulse"
+            >
+              <Circle className="h-4 w-4 mr-1 fill-red-600" />
+              Stop Recording
+            </Button>
+          )}
+
+          {/* Chat */}
+          <Button 
+            onClick={() => setIsChatOpen(!isChatOpen)} 
+            title="Toggle chat"
+            size="sm"
+            variant={isChatOpen ? "default" : "outline"}
+            className="shadow-md hover:shadow-lg transition-all duration-200 relative"
+          >
+            <MessageSquare className="h-4 w-4 mr-1" />
+            Chat
+            {chatMessages.length > 0 && !isChatOpen && (
+              <span className="absolute -top-1 -right-1 h-4 w-4 bg-red-600 text-white text-xs rounded-full flex items-center justify-center">
+                {chatMessages.length}
+              </span>
+            )}
+          </Button>
+
+          {/* Reactions */}
+          <div className="flex items-center gap-1 bg-gray-50 rounded-lg px-2 py-1">
+            <Button 
+              onClick={() => sendReaction('👍')} 
+              title="Thumbs up"
+              size="sm"
+              variant="ghost"
+              className="h-8 w-8 p-0 text-lg"
+            >
+              👍
+            </Button>
+            <Button 
+              onClick={() => sendReaction('❤️')} 
+              title="Heart"
+              size="sm"
+              variant="ghost"
+              className="h-8 w-8 p-0 text-lg"
+            >
+              ❤️
+            </Button>
+            <Button 
+              onClick={() => sendReaction('😂')} 
+              title="Laugh"
+              size="sm"
+              variant="ghost"
+              className="h-8 w-8 p-0 text-lg"
+            >
+              😂
+            </Button>
+            <Button 
+              onClick={() => sendReaction('👏')} 
+              title="Clap"
+              size="sm"
+              variant="ghost"
+              className="h-8 w-8 p-0 text-lg"
+            >
+              👏
+            </Button>
+          </div>
+
+          {/* Hand Raise */}
+          <Button 
+            onClick={toggleHandRaise} 
+            title={handRaised ? "Lower hand" : "Raise hand"}
+            size="sm"
+            variant={handRaised ? "default" : "outline"}
+            className={`shadow-md hover:shadow-lg transition-all duration-200 ${handRaised ? 'bg-yellow-500 hover:bg-yellow-600' : ''}`}
+          >
+            <Hand className="h-4 w-4 mr-1" />
+            {handRaised ? "Lower" : "Raise"}
+          </Button>
+
+          {/* View Mode */}
+          <Button 
+            onClick={() => setViewMode(viewMode === "gallery" ? "speaker" : "gallery")} 
+            title={`Switch to ${viewMode === "gallery" ? "speaker" : "gallery"} view`}
+            size="sm"
+            variant="outline"
+            className="shadow-md hover:shadow-lg transition-all duration-200"
+          >
+            {viewMode === "gallery" ? <User className="h-4 w-4 mr-1" /> : <Grid3x3 className="h-4 w-4 mr-1" />}
+            {viewMode === "gallery" ? "Speaker" : "Gallery"}
+          </Button>
+
+          {/* Whiteboard */}
+          <Button 
+            onClick={() => setShowWhiteboard(!showWhiteboard)} 
+            title="Toggle whiteboard"
+            size="sm"
+            variant={showWhiteboard ? "default" : "outline"}
+            className="shadow-md hover:shadow-lg transition-all duration-200"
+          >
+            <PenTool className="h-4 w-4 mr-1" />
+            Whiteboard
+          </Button>
+
+          {/* Settings */}
+          <Button 
+            onClick={() => setShowSettings(!showSettings)} 
+            title="Settings"
+            size="sm"
+            variant="outline"
+            className="shadow-md hover:shadow-lg transition-all duration-200"
+          >
+            <Settings className="h-4 w-4" />
+          </Button>
+          
+          {/* Leave */}
+          <Button 
+            onClick={leaveSession} 
+            variant="destructive" 
+            title="Leave session" 
+            size="sm"
+            className="bg-red-600 hover:bg-red-700 shadow-md hover:shadow-lg transition-all duration-200 ml-2"
+          >
+            <PhoneOff className="h-4 w-4 mr-1" /> Leave
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Videochat;
+
+const userName = `User-${new Date().getTime().toString().slice(8)}`;

@@ -1,0 +1,200 @@
+Table: users
+Fields:
+id (int, primary key)
+username (string, unique)
+email (string, unique)
+password (string)
+first_name (string) - NOTE: Use snake_case in SQL queries
+last_name (string) - NOTE: Use snake_case in SQL queries
+role_id (int, foreign key → roles.id) - NOTE: Use snake_case in SQL queries
+role_name (string) - NOTE: Use snake_case in SQL queries
+is_active (boolean) - NOTE: Use snake_case in SQL queries
+created_at (timestamp) - NOTE: Use snake_case in SQL queries
+updated_at (timestamp) - NOTE: Use snake_case in SQL queries
+user_type (enum: associate, manager, team-lead, admin) - NOTE: Use snake_case in SQL queries
+avatar (string)
+is_email_notification (boolean) - NOTE: Use snake_case in SQL queries
+
+Relations:
+role → roles
+teams → team_members
+assignedLeads → leads
+assignedCustomers → customers
+assignedOpportunities → opportunities
+assignedTasks → tasks
+createdTasks → tasks
+activities → activities
+meetings → meetings
+
+Table: roles
+Fields:
+id (int, primary key)
+name (string, unique)
+description (string)
+permissions (array of strings)
+roleType (enum: associate, manager, team-lead, none)
+createdAt (timestamp)
+updatedAt (timestamp)
+
+Relations:
+users → users
+
+Table: teams
+Fields:
+id (int, primary key)
+name (string, unique)
+description (string)
+role_id (int, foreign key → roles.id) - NOTE: Use snake_case in SQL queries
+created_by_user_id (int, foreign key → users.id) - NOTE: Use snake_case in SQL queries
+avatar (string)
+created_at (timestamp) - NOTE: Use snake_case in SQL queries
+updated_at (timestamp) - NOTE: Use snake_case in SQL queries
+
+Relations:
+role → roles
+createdByUser → users
+members → team_members
+
+Table: team_members
+Fields:
+id (int, primary key)
+team_id (int, foreign key → teams.id) - NOTE: Use snake_case in SQL queries
+user_id (int, foreign key → users.id) - NOTE: Use snake_case in SQL queries
+
+Relations:
+team → teams
+user → users
+
+Table: customers
+Fields:
+id (int, primary key)
+company_name (string) - NOTE: Use snake_case in SQL queries
+email (string)
+phone (string)
+website (string)
+annual_revenue (float) - NOTE: Use snake_case in SQL queries
+city (string)
+country (string)
+industry (string)
+status (string, default: active)
+assigned_user_id (int, foreign key → users.id) - NOTE: Use snake_case in SQL queries
+created_at (timestamp) - NOTE: Use snake_case in SQL queries
+updated_at (timestamp) - NOTE: Use snake_case in SQL queries
+
+Relations:
+assignedUser → users
+leads → leads
+opportunities → opportunities
+contacts → contacts
+tasks → tasks
+emails → emails
+meetings → meetings
+
+Table: leads
+Fields:
+id (int, primary key)
+name (string)
+email (string)
+phone (string)
+probability (int)
+customer_id (int, foreign key → customers.id) - NOTE: Use snake_case in SQL queries
+contact_id (int, foreign key → contacts.id) - NOTE: Use snake_case in SQL queries
+source (string)
+status (string, default: new)
+value (decimal)
+assigned_user_id (int, foreign key → users.id) - NOTE: Use snake_case in SQL queries
+created_by_user_id (int, foreign key → users.id) - NOTE: Use snake_case in SQL queries
+company_name (string) - NOTE: Use snake_case in SQL queries
+first_name (string) - NOTE: Use snake_case in SQL queries
+last_name (string) - NOTE: Use snake_case in SQL queries
+website_url (string) - NOTE: Use snake_case in SQL queries
+country_region (string) - NOTE: Use snake_case in SQL queries
+time_zone (string) - NOTE: Use snake_case in SQL queries
+assigned_user_name (string) - NOTE: Use snake_case in SQL queries
+created_by_user_name (string) - NOTE: Use snake_case in SQL queries
+rsp (boolean, default: false)
+rsp_files (array) - NOTE: Use snake_case in SQL queries
+created_at (timestamp) - NOTE: Use snake_case in SQL queries
+updated_at (timestamp) - NOTE: Use snake_case in SQL queries
+total_count (int) - NOTE: Use snake_case in SQL queries
+
+Relations:
+assignedUser → users
+customer → customers
+opportunities → opportunities
+tasks → tasks
+emails → emails
+meetings → meetings
+
+Table: opportunities
+Fields:
+id (int, primary key)
+name (string)
+value (int)
+stage (string)
+lead_id (int, foreign key → leads.id) - NOTE: Use snake_case in SQL queries (NOT leadId)
+customer_id (int, foreign key → customers.id) - NOTE: Use snake_case in SQL queries (NOT customerId)
+assigned_user_id (int, foreign key → users.id) - NOTE: Use snake_case in SQL queries (NOT assignedUserId)
+created_by_user_id (int, foreign key → users.id) - NOTE: Use snake_case in SQL queries
+is_closed_won (boolean) - NOTE: Use snake_case in SQL queries (NOT isClosedWon)
+is_closed_lost (boolean) - NOTE: Use snake_case in SQL queries (NOT isClosedLost)
+created_at (timestamp) - NOTE: Use snake_case in SQL queries
+updated_at (timestamp) - NOTE: Use snake_case in SQL queries
+company_name (string) - NOTE: Use snake_case in SQL queries (NOT companyName for opportunities table)
+Relations:
+lead → leads
+customer → customers
+assignedUser → users
+tasks → tasks
+meetings → meetings
+
+Table: contacts
+Fields:
+id (int, primary key)
+first_name (string) - NOTE: Use snake_case in SQL queries
+last_name (string) - NOTE: Use snake_case in SQL queries
+assigned_user_id (int, foreign key → users.id) - NOTE: Use snake_case in SQL queries
+company_id (int, foreign key → customers.id) - NOTE: Use snake_case in SQL queries
+email (string)
+phone (string)
+isActive (boolean)
+created_at (timestamp) - NOTE: Use snake_case in SQL queries
+updated_at (timestamp) - NOTE: Use snake_case in SQL queries
+
+Relations:
+company → customers
+assignedUser → users
+
+Table: tasks
+Fields:
+id (int, primary key)
+title (string)
+description (string)
+status (string)
+priority (string)
+dueDate (date)
+assigned_user_id (int, foreign key → users.id) - NOTE: Use snake_case in SQL queries
+created_by_user_id (int, foreign key → users.id) - NOTE: Use snake_case in SQL queries
+lead_id (int, foreign key → leads.id) - NOTE: Use snake_case in SQL queries
+customer_id (int, foreign key → customers.id) - NOTE: Use snake_case in SQL queries
+opportunity_id (int, foreign key → opportunities.id) - NOTE: Use snake_case in SQL queries
+
+Relations:
+assignedUser → users
+createdByUser → users
+lead → leads
+customer → customers
+opportunity → opportunities
+
+Table: activities
+Fields:
+id (int, primary key)
+type (string)
+description (string)
+entity_type (string) - NOTE: Use snake_case in SQL queries
+entity_id (int) - NOTE: Use snake_case in SQL queries
+user_id (int, foreign key → users.id) - NOTE: Use snake_case in SQL queries
+
+Relations:
+user → users
+

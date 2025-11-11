@@ -1,0 +1,199 @@
+{
+  "users": {
+    "fields": {
+      "id": "int pk",
+      "username": "string unique",
+      "email": "string unique",
+      "password": "string",
+      "firstName": "string",
+      "lastName": "string",
+      "roleId": "int fk roles.id",
+      "rolename": "string",
+      "isActive": "bool",
+      "createdAt": "timestamp",
+      "updatedAt": "timestamp",
+      "userType": "enum[associate,manager,team-lead,admin]",
+      "avatar": "string",
+      "isEmailNotification": "bool"
+    },
+    "relations": {
+      "role": "roles",
+      "teams": "team_members",
+      "assignedLeads": "leads",
+      "assignedCustomers": "customers",
+      "assignedOpportunities": "opportunities",
+      "assignedTasks": "tasks",
+      "createdTasks": "tasks",
+      "emailConfigurations": "email_configurations",
+      "emails": "emails",
+      "emailTemplates": "email_templates",
+      "activities": "activities",
+      "meetings": "meetings",
+      "notifications": "notifications"
+    }
+  },
+  "roles": {
+    "fields": {
+      "id": "int pk",
+      "name": "string unique",
+      "description": "string",
+      "permissions": "string[]",
+      "roleType": "enum[associate,manager,team-lead,none]",
+      "createdAt": "timestamp",
+      "updatedAt": "timestamp"
+    },
+    "relations": {
+      "users": "users"
+    }
+  },
+  "teams": {
+    "fields": {
+      "id": "int pk",
+      "name": "string unique",
+      "description": "string",
+      "roleId": "int fk roles.id",
+      "createdByUserId": "int fk users.id",
+      "avatar": "string",
+      "createdAt": "timestamp",
+      "updatedAt": "timestamp"
+    },
+    "relations": {
+      "role": "roles",
+      "createdByUser": "users",
+      "members": "team_members"
+    }
+  },
+  "team_members": {
+    "fields": {
+      "id": "int pk",
+      "teamId": "int fk teams.id",
+      "userId": "int fk users.id"
+    },
+    "relations": {
+      "team": "teams",
+      "user": "users"
+    }
+  },
+  "customers": {
+    "fields": {
+      "id": "int pk",
+      "companyName": "string",
+      "email": "string",
+      "phone": "string",
+      "website": "string",
+      "annualRevenue": "float",
+      "city": "string",
+      "country": "string",
+      "industry": "string",
+      "status": "string default active",
+      "assignedUserId": "int fk users.id",
+      "createdAt": "timestamp",
+      "updatedAt": "timestamp"
+    },
+    "relations": {
+      "assignedUser": "users",
+      "leads": "leads",
+      "opportunities": "opportunities",
+      "contacts": "contacts",
+      "tasks": "tasks",
+      "emails": "emails",
+      "meetings": "meetings"
+    }
+  },
+  "leads": {
+    "fields": {
+      "id": "int pk",
+      "name": "string",
+      "email": "string",
+      "phone": "string",
+      "probability": "int",
+      "customerId": "int fk customers.id",
+      "contactId": "int fk contacts.id",
+      "source": "string",
+      "status": "string default new",
+      "value": "decimal",
+      "assignedUserId": "int fk users.id",
+      "createdByUserId": "int fk users.id",
+      "companyName": "string",
+      "rsp": "bool default false"
+    },
+    "relations": {
+      "assignedUser": "users",
+      "customer": "customers",
+      "opportunities": "opportunities",
+      "tasks": "tasks",
+      "emails": "emails",
+      "meetings": "meetings"
+    }
+  },
+  "opportunities": {
+    "fields": {
+      "id": "int pk",
+      "name": "string",
+      "value": "int",
+      "stage": "string",
+      "leadId": "int fk leads.id",
+      "customerId": "int fk customers.id",
+      "assignedUserId": "int fk users.id",
+      "isClosedWon": "bool",
+      "isClosedLost": "bool"
+    },
+    "relations": {
+      "lead": "leads",
+      "customer": "customers",
+      "assignedUser": "users",
+      "tasks": "tasks",
+      "meetings": "meetings"
+    }
+  },
+  "contacts": {
+    "fields": {
+      "id": "int pk",
+      "firstName": "string",
+      "lastName": "string",
+      "assignedUserId": "int fk users.id",
+      "companyId": "int fk customers.id",
+      "email": "string",
+      "phone": "string",
+      "isActive": "bool",
+      "createdAt": "timestamp"
+    },
+    "relations": {
+      "company": "customers",
+      "assignedUser": "users"
+    }
+  },
+  "tasks": {
+    "fields": {
+      "id": "int pk",
+      "title": "string",
+      "description": "string",
+      "status": "string",
+      "priority": "string",
+      "dueDate": "date",
+      "assignedUserId": "int fk users.id",
+      "createdByUserId": "int fk users.id",
+      "leadId": "int fk leads.id",
+      "customerId": "int fk customers.id",
+      "opportunityId": "int fk opportunities.id"
+    },
+    "relations": {
+      "assignedUser": "users",
+      "createdByUser": "users",
+      "lead": "leads",
+      "customer": "customers",
+      "opportunity": "opportunities"
+    }
+  },
+  "activities": {
+    "fields": {
+      "id": "int pk",
+      "type": "string",
+      "description": "string",
+      "entityType": "string",
+      "entityId": "int",
+      "userId": "int fk users.id"
+    },
+    "relations": { "user": "users" }
+  }
+}
