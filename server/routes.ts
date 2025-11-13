@@ -62,6 +62,12 @@ export function registerRoutes(app: Express): Server {
   const upload = multer({ storage: multer.memoryStorage() });
   setupAuth(app);
 
+  // TODO: Add route for creating a new customer (Add Client)
+  // - POST `/api/customers`
+  // - Validate request body with a shared `insertCustomerSchema` (Zod)
+  // - Call `storage.createCustomer(...)` or a controller method
+  // - Apply auth/permission checks and return 201 with the created customer
+
   // Webhook routes - must be public (no authentication required)
   app.get("/api/webhook", (req, res) => {
     const mode = req.query['hub.mode'];

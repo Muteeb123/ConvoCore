@@ -44,8 +44,12 @@ function Router() {
       <ProtectedRoute path="/" component={NewDashboard} />  
       <Route path="/reset-password" component={ResetPasswordPage} />
       <ProtectedRoute path="/oldDashboard" component={Dashboard} />
-      <ProtectedRoute path="/leads" component={Leads} />
-      <ProtectedRoute path="/customers" component={Customers} />
+        <ProtectedRoute path="/leads" component={Leads} />
+        {/* TODO: Add an "Add Client" entry point on the `Customers` page.
+          - Provide a button or route to open a `CustomerForm` component.
+          - The form should POST to `/api/customers` and refresh the list on success.
+        */}
+        <ProtectedRoute path="/customers" component={Customers} />
       <ProtectedRoute path="/opportunities" component={Opportunities} />
       <ProtectedRoute path="/contacts" component={Contacts} />
       <ProtectedRoute path="/emails" component={Emails} />

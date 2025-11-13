@@ -74,6 +74,8 @@ app.use((req, res, next) => {
 
 (async () => {
   const server = await registerRoutes(app);
+  // NOTE: Ensure any new routes (e.g. POST /api/customers) are registered
+  //        and any required middleware (auth, validation) is applied in `registerRoutes`.
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

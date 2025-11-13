@@ -280,6 +280,12 @@ class CustomersStorage {
   }
 }
 
+// TODO: Implement createCustomer
+// - Signature: async createCustomer(input: InsertCustomer): Promise<Customer>
+// - Validate input (use a Zod schema or shared `insertCustomerSchema`) before inserting
+// - Insert into `customers` table and return the created record
+// - Populate denormalized fields (assignedUserName / createdByUserName) if needed
+// - Handle file references (customerFiles) and any initial notes
 // Export a singleton instance
 export const customersStorage = new CustomersStorage();
 

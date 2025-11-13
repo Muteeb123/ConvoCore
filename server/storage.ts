@@ -79,6 +79,11 @@ export interface IStorage {
   getRoles(): Promise<Role[]>;
 
   getCustomer(id: number): Promise<Customer | undefined>;
+  // TODO: createCustomer implementation notes:
+  // - Accept an `InsertCustomer` (or DTO) validated by a shared schema
+  // - Persist the record in the `customers` table and return the created Customer
+  // - Ensure related denormalized fields (assignedUserName, createdByUserName) are set
+  // - Return proper errors for duplicate or invalid input
   createCustomer(customer: InsertCustomer): Promise<Customer>;
   updateCustomer(id: number, customer: Partial<InsertCustomer>): Promise<Customer>;
   deleteCustomer(id: number): Promise<void>;

@@ -74,6 +74,11 @@ export const roles = pgTable("roles", {
 });
 
 export const customers = pgTable("customers", {
+  // NOTE: Customer model for persistence. For the "Add Client" feature:
+  // - Add a corresponding InsertCustomer / CreateCustomer TypeScript type or Zod schema
+  //   (e.g. `insertCustomerSchema`) for validating API input.
+  // - Ensure the frontend uses a matching DTO when POSTing to `/api/customers`.
+  // - Keep denormalized fields (assignedUserName, createdByUserName) in sync when creating.
   id: serial("id").primaryKey(),
   companyName: text("company_name").notNull(),
   email: text("email"),
