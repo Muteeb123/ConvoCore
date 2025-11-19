@@ -5,144 +5,142 @@ import {
   desc,
   inArray,
   sql,
-  gte,
-  lte,
   ilike,
-  isNotNull,
-  isNull,
 } from "drizzle-orm";
-import { db } from "./db"; // Assuming your db export is here
+import { db } from "./db";
 import {
   contacts,
   users,
   customers,
-  type Contact
-} from "@shared/schema"; // Assuming your schema is here
+  type Contact,
+} from "@shared/schema";
 
-// --- 1. Define the Filters Interface ---
-// Matches the filters available in the frontend and API
+/**
+ * Filters that can be applied when querying contacts.
+ * Fields are optional and correspond to UI filter controls.
+ */
 export interface ContactFilters {
   search?: string;
-  status?: boolean | null; // true=active, false=inactive, null=all
-  assignedUser?: string; // Username
-  createdBy?: string; // Username
+  status?: boolean | null;
+  assignedUser?: string;
+  createdBy?: string;
   jobTitle?: string;
   industry?: string;
   countryRegion?: string;
   timeZone?: string;
   marketingStatus?: string;
-  customerId?: number; // Kept from original getContacts filter
-  // tags?: string[]; // Add if needed
+  customerId?: number;
 }
 
 /**
- * Encapsulates database logic for fetching and filtering Contacts.
+ * ContactsStorage encapsulates database access for contact records.
+ * It provides helpers to build query conditions, enrich contact rows
+ * with related data, and public methods to fetch contacts with
+ * pagination and filters applied.
  */
 class ContactsStorage {
   /**
-   * [HELPER] Builds dynamic WHERE conditions for contact filtering.
+   * Build an array of WHERE conditions from the provided filters.
+   * The returned array can be spread into `and(...)` or used directly
+   * when there are no conditions.
+   * @param filters - Filtering options from the client
+   * @returns Array of expressions usable by drizzle-orm where()
    */
   private buildWhereConditions(filters: ContactFilters) {
-    const conditions = [];
+    const conditions: any[] = [];
 
-    // Search Term
     if (filters.search) {
       const searchPattern = `%${filters.search}%`;
       conditions.push(
         or(
-          // Search first name, last name, email, job title, company name, phone, industry, country
           sql`concat(${contacts.firstName}, ' ', ${contacts.lastName}) ilike ${searchPattern}`,
           ilike(contacts.email, searchPattern),
           ilike(contacts.jobTitle, searchPattern),
-          ilike(contacts.companyName, searchPattern), // Assuming denormalized
+          ilike(contacts.companyName, searchPattern),
           ilike(contacts.phone, searchPattern),
-          ilike(contacts.industry, searchPattern), // Assuming denormalized
-          ilike(contacts.countryRegion, searchPattern) // Assuming denormalized
+          ilike(contacts.industry, searchPattern),
+          ilike(contacts.countryRegion, searchPattern)
         )
       );
     }
 
-    // Status Filter (isActive boolean)
     if (filters.status !== null && filters.status !== undefined) {
       conditions.push(eq(contacts.isActive, filters.status));
     }
 
-    // Single-select Filters (handle 'all' case by not adding condition)
     if (filters.assignedUser && filters.assignedUser !== "all") {
-      conditions.push(eq(contacts.assignedUserName, filters.assignedUser)); // Filter by username
+      conditions.push(eq(contacts.assignedUserName, filters.assignedUser));
     }
     if (filters.createdBy && filters.createdBy !== "all") {
-      conditions.push(eq(contacts.createdUserName, filters.createdBy)); // Filter by username
+      conditions.push(eq(contacts.createdUserName, filters.createdBy));
     }
-     if (filters.jobTitle && filters.jobTitle !== "all") {
-       conditions.push(eq(contacts.jobTitle, filters.jobTitle));
-     }
-     if (filters.industry && filters.industry !== "all") {
-       conditions.push(eq(contacts.industry, filters.industry));
-     }
-     if (filters.countryRegion && filters.countryRegion !== "all") {
-       conditions.push(eq(contacts.countryRegion, filters.countryRegion));
-     }
-     if (filters.timeZone && filters.timeZone !== "all") {
-       conditions.push(eq(contacts.timeZone, filters.timeZone));
-     }
-     if (filters.marketingStatus && filters.marketingStatus !== "all") {
-       conditions.push(eq(contacts.marketingContactStatus, filters.marketingStatus));
-     }
+    if (filters.jobTitle && filters.jobTitle !== "all") {
+      conditions.push(eq(contacts.jobTitle, filters.jobTitle));
+    }
+    if (filters.industry && filters.industry !== "all") {
+      conditions.push(eq(contacts.industry, filters.industry));
+    }
+    if (filters.countryRegion && filters.countryRegion !== "all") {
+      conditions.push(eq(contacts.countryRegion, filters.countryRegion));
+    }
+    if (filters.timeZone && filters.timeZone !== "all") {
+      conditions.push(eq(contacts.timeZone, filters.timeZone));
+    }
+    if (filters.marketingStatus && filters.marketingStatus !== "all") {
+      conditions.push(eq(contacts.marketingContactStatus, filters.marketingStatus));
+    }
 
-    // Customer ID (from original getContacts filter)
     if (filters.customerId) {
-      conditions.push(eq(contacts.companyId, filters.customerId)); // companyId likely references customers.id
+      conditions.push(eq(contacts.companyId, filters.customerId));
     }
-
-    // Add tags filter if implemented later
-    // if (filters.tags && filters.tags.length > 0) {
-    //   conditions.push(sql`${contacts.tags} @> ${filters.tags}`); // Assuming tags is text[]
-    // }
 
     return conditions;
   }
 
   /**
-   * [HELPER] Populates related details (user names, company name) for contacts.
+   * Enrich a list of contact rows with related user and company names.
+   * This performs minimal queries to fetch usernames and company names
+   * for the ids referenced on the contact rows and merges them back in.
+   * @param contactList - Array of contact records from the DB
+   * @returns The same contact objects augmented with name fields
    */
   private async populateContactDetails(contactList: Contact[]): Promise<Contact[]> {
     if (contactList.length === 0) return [];
 
     const userIds = new Set<number>();
-    const companyIds = new Set<number>(); // Assuming companyId links to customers table
+    const companyIds = new Set<number>();
 
-    contactList.forEach(c => {
+    contactList.forEach((c) => {
       if (c.assignedUserId) userIds.add(c.assignedUserId);
       if (c.createdByUserId) userIds.add(c.createdByUserId);
-      if (c.updatedByUserId) userIds.add(c.updatedByUserId); // Include updatedBy if needed
+      if (c.updatedByUserId) userIds.add(c.updatedByUserId);
       if (c.companyId) companyIds.add(c.companyId);
     });
 
-    // Fetch related data in parallel
     const [usersList, companiesList] = await Promise.all([
-       userIds.size > 0 ? db.select({ id: users.id, username: users.username }).from(users).where(inArray(users.id, Array.from(userIds))) : Promise.resolve([]),
-       companyIds.size > 0 ? db.select({ id: customers.id, companyName: customers.companyName }).from(customers).where(inArray(customers.id, Array.from(companyIds))) : Promise.resolve([]),
+      userIds.size > 0
+        ? db.select({ id: users.id, username: users.username }).from(users).where(inArray(users.id, Array.from(userIds)))
+        : Promise.resolve([]),
+      companyIds.size > 0
+        ? db.select({ id: customers.id, companyName: customers.companyName }).from(customers).where(inArray(customers.id, Array.from(companyIds)))
+        : Promise.resolve([]),
     ]);
 
-    // Create maps for quick lookup
-    const userMap = new Map(usersList.map(u => [u.id, u.username]));
-    const companyMap = new Map(companiesList.map(c => [c.id, c.companyName]));
+    const userMap = new Map(usersList.map((u: any) => [u.id, u.username]));
+    const companyMap = new Map(companiesList.map((c: any) => [c.id, c.companyName]));
 
-    // Map through contacts and add the populated data
-    return contactList.map(c => ({
+    return contactList.map((c) => ({
       ...c,
       assignedUserName: c.assignedUserId ? userMap.get(c.assignedUserId) || c.assignedUserName || null : null,
       createdUserName: c.createdByUserId ? userMap.get(c.createdByUserId) || c.createdUserName || null : null,
-      updatedUserName: c.updatedByUserId ? userMap.get(c.updatedByUserId) || c.updatedUserName || null : null, // Populate if needed
-      companyName: c.companyId ? companyMap.get(c.companyId) || c.companyName || null : null, // Populate company name
+      updatedUserName: c.updatedByUserId ? userMap.get(c.updatedByUserId) || c.updatedUserName || null : null,
+      companyName: c.companyId ? companyMap.get(c.companyId) || c.companyName || null : null,
     }));
   }
 
-  // --- PUBLIC METHODS ---
-
   /**
-   * Fetches paginated/filtered list of all contacts (Admin).
+   * Query all contacts with optional filters and pagination.
+   * Returns the paginated result and the total count matching the filters.
    */
   async getContacts(
     filters: ContactFilters = {},
@@ -166,7 +164,8 @@ class ContactsStorage {
   }
 
   /**
-   * Fetches paginated/filtered contacts for a specific user (created or assigned).
+   * Query contacts that are either created by or assigned to a specific user.
+   * Applies the same filters and pagination as `getContacts`.
    */
   async getContactsByUser(
     userId: number,
@@ -176,7 +175,6 @@ class ContactsStorage {
     const limitValue = pagination.limit ?? 25;
     const offsetValue = pagination.offset ?? 0;
 
-    // Base user condition
     const baseUserCondition = or(eq(contacts.createdByUserId, userId), eq(contacts.assignedUserId, userId));
     const filterConditions = this.buildWhereConditions(filters);
     const finalWhere = filterConditions.length > 0 ? and(baseUserCondition, ...filterConditions) : baseUserCondition;
@@ -185,16 +183,17 @@ class ContactsStorage {
     const totalcount = Number(totalResult[0]?.count ?? 0);
 
     let contactList: Contact[] = [];
-     if (totalcount > 0 || offsetValue === 0) {
-       contactList = await db.select().from(contacts).where(finalWhere).orderBy(desc(contacts.createdAt)).limit(limitValue).offset(offsetValue);
-     }
+    if (totalcount > 0 || offsetValue === 0) {
+      contactList = await db.select().from(contacts).where(finalWhere).orderBy(desc(contacts.createdAt)).limit(limitValue).offset(offsetValue);
+    }
 
     const populatedContacts = await this.populateContactDetails(contactList);
     return { result: populatedContacts, totalcount };
   }
 
   /**
-   * Fetches paginated/filtered contacts for multiple users (Manager/Team Lead).
+   * Query contacts for multiple users (e.g., team members) by their IDs.
+   * Useful for manager/team views where multiple user scopes are combined.
    */
   async getContactsByUserIds(
     userIds: number[],
@@ -202,13 +201,13 @@ class ContactsStorage {
     pagination: { limit?: number; offset?: number } = {}
   ): Promise<{ result: Contact[]; totalcount: number }> {
     if (!userIds || userIds.length === 0) {
-        console.warn("getContactsByUserIds called with empty userIds array.");
-        return { result: [], totalcount: 0 };
+      console.warn("getContactsByUserIds called with empty userIds array.");
+      return { result: [], totalcount: 0 };
     }
+
     const limitValue = pagination.limit ?? 25;
     const offsetValue = pagination.offset ?? 0;
 
-    // Base user condition
     const baseUserCondition = or(inArray(contacts.createdByUserId, userIds), inArray(contacts.assignedUserId, userIds));
     const filterConditions = this.buildWhereConditions(filters);
     const finalWhere = filterConditions.length > 0 ? and(baseUserCondition, ...filterConditions) : baseUserCondition;
@@ -218,7 +217,7 @@ class ContactsStorage {
 
     let contactList: Contact[] = [];
     if (totalcount > 0 || offsetValue === 0) {
-        contactList = await db.select().from(contacts).where(finalWhere).orderBy(desc(contacts.createdAt)).limit(limitValue).offset(offsetValue);
+      contactList = await db.select().from(contacts).where(finalWhere).orderBy(desc(contacts.createdAt)).limit(limitValue).offset(offsetValue);
     }
 
     const populatedContacts = await this.populateContactDetails(contactList);
@@ -226,5 +225,4 @@ class ContactsStorage {
   }
 }
 
-// Export a singleton instance
 export const contactsStorage = new ContactsStorage();
