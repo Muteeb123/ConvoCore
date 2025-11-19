@@ -152,50 +152,12 @@ class OpportunitiesStorage {
   }
 
   /**
-   * [HELPER] Populates related details (user names, company, lead) for opportunities.
-   * This version assumes assignedUserName, createdByUserName, companyName might already exist
-   * due to denormalization or previous population steps. It focuses on lead and contact names.
+   * Populate related details (lead, contact, users, customer) for a batch
+   * of opportunities. Performs minimal batch queries for IDs referenced
+   * on the opportunities to avoid N+1 queries.
+   * @param oppsList - Array of opportunity rows returned by a paginated query
+   * @returns Array of opportunity rows augmented with human-readable names
    */
-  // private async populateOpportunityDetails(oppsList: Opportunity[]): Promise<Opportunity[]> {
-  //   if (oppsList.length === 0) return [];
-
-  //   const leadIds = new Set<number>();
-  //   const contactIds = new Set<number>();
-  //   const userIds = new Set<number>(); // To ensure usernames are up-to-date if needed
-
-  //   oppsList.forEach(opp => {
-  //     if (opp.leadId) leadIds.add(opp.leadId);
-  //     if (opp.associatedContact) contactIds.add(opp.associatedContact);
-  //     // Optionally re-fetch users if names might be stale
-  //     // if (opp.assignedUserId) userIds.add(opp.assignedUserId);
-  //     // if (opp.createdByUserId) userIds.add(opp.createdByUserId);
-  //   });
-
-  //   // Fetch related data in parallel (only fetching what's needed now)
-  //   const [leadsList, contactsList /*, usersList (optional) */] = await Promise.all([
-  //      leadIds.size > 0 ? db.select({ id: leads.id, name: leads.name }).from(leads).where(inArray(leads.id, Array.from(leadIds))) : Promise.resolve([]),
-  //      contactIds.size > 0 ? db.select({ id: contacts.id, firstName: contacts.firstName, lastName: contacts.lastName }).from(contacts).where(inArray(contacts.id, Array.from(contactIds))) : Promise.resolve([]),
-  //      // userIds.size > 0 ? db.select({ id: users.id, username: users.username }).from(users).where(inArray(users.id, Array.from(userIds))) : Promise.resolve([]),
-  //   ]);
-
-  //   // Create maps for quick lookup
-  //   const leadMap = new Map(leadsList.map(l => [l.id, l.name]));
-  //   const contactMap = new Map(contactsList.map(c => [c.id, `${c.firstName || ''} ${c.lastName || ''}`.trim()]));
-  //   // const userMap = new Map(usersList.map(u => [u.id, u.username])); // Optional
-
-  //   // Map through opportunities and add/update the populated data
-  //   return oppsList.map(opp => ({
-  //     ...opp,
-  //     // Optionally update usernames if fetched:
-  //     // assignedUserName: opp.assignedUserId ? userMap.get(opp.assignedUserId) || opp.assignedUserName || null : null,
-  //     // createdByUserName: opp.createdByUserId ? userMap.get(opp.createdByUserId) || opp.createdByUserName || null : null,
-  //     leadName: opp.leadId ? leadMap.get(opp.leadId) || null : null,
-  //     // companyName remains as is (assuming it's on the opp table)
-  //     associatedContactName: opp.associatedContact ? contactMap.get(opp.associatedContact) || null : null,
-  //   }));
-  // }
-
-  // --- PUBLIC METHODS ---
 private async populateOpportunityDetails(oppsList: Opportunity[]): Promise<Opportunity[]> {
   if (oppsList.length === 0) return [];
 
@@ -205,7 +167,6 @@ private async populateOpportunityDetails(oppsList: Opportunity[]): Promise<Oppor
   const assignedByIds = new Set<number>();
   const customerIds = new Set<number>();
 
-  // Collect unique IDs for batch fetching
   oppsList.forEach((opp) => {
     if (opp.leadId) leadIds.add(opp.leadId);
     if (opp.associatedContact) contactIds.add(opp.associatedContact);
@@ -214,50 +175,28 @@ private async populateOpportunityDetails(oppsList: Opportunity[]): Promise<Oppor
     if (opp.customerId) customerIds.add(opp.customerId);
   });
 
-  // Fetch all related entities in parallel
-  const [
-    leadsList,
-    contactsList,
-    createdUsersList,
-    assignedUsersList,
-    customersList,
-  ] = await Promise.all([
+  const [leadsList, contactsList, createdUsersList, assignedUsersList, customersList] = await Promise.all([
     leadIds.size > 0
-      ? db
-          .select({ id: leads.id, name: leads.name })
-          .from(leads)
-          .where(inArray(leads.id, Array.from(leadIds)))
+      ? db.select({ id: leads.id, name: leads.name }).from(leads).where(inArray(leads.id, Array.from(leadIds)))
       : Promise.resolve([]),
 
     contactIds.size > 0
       ? db
-          .select({
-            id: contacts.id,
-            firstName: contacts.firstName,
-            lastName: contacts.lastName,
-          })
+          .select({ id: contacts.id, firstName: contacts.firstName, lastName: contacts.lastName })
           .from(contacts)
           .where(inArray(contacts.id, Array.from(contactIds)))
       : Promise.resolve([]),
 
     createdByIds.size > 0
       ? db
-          .select({
-            id: users.id,
-            firstName: users.firstName,
-            lastName: users.lastName,
-          })
+          .select({ id: users.id, firstName: users.firstName, lastName: users.lastName })
           .from(users)
           .where(inArray(users.id, Array.from(createdByIds)))
       : Promise.resolve([]),
 
     assignedByIds.size > 0
       ? db
-          .select({
-            id: users.id,
-            firstName: users.firstName,
-            lastName: users.lastName,
-          })
+          .select({ id: users.id, firstName: users.firstName, lastName: users.lastName })
           .from(users)
           .where(inArray(users.id, Array.from(assignedByIds)))
       : Promise.resolve([]),
@@ -270,40 +209,42 @@ private async populateOpportunityDetails(oppsList: Opportunity[]): Promise<Oppor
       : Promise.resolve([]),
   ]);
 
-  // Create lookup maps for quick access
-  const leadMap = new Map(leadsList.map((l) => [l.id, l.name]));
-  const contactMap = new Map(
-    contactsList.map((c) => [
-      c.id,
-      `${c.firstName || ""} ${c.lastName || ""}`.trim(),
-    ])
-  );
-  const createdUserMap = new Map(
-    createdUsersList.map((u) => [u.id, `${u.firstName} ${u.lastName}`.trim()])
-  );
-  const assignedUserMap = new Map(
-    assignedUsersList.map((u) => [u.id, `${u.firstName} ${u.lastName}`.trim()])
-  );
-  const customerMap = new Map(customersList.map((c) => [c.id, c.name]));
+  const leadMap = new Map<number, string>(leadsList.map((l: any) => [l.id, l.name]));
+  const contactMap = new Map<number, string>(contactsList.map((c: any) => [c.id, `${c.firstName || ""} ${c.lastName || ""}`.trim()]));
+  const createdUserMap = new Map<number, string>(createdUsersList.map((u: any) => [u.id, `${u.firstName || ""} ${u.lastName || ""}`.trim()]));
+  const assignedUserMap = new Map<number, string>(assignedUsersList.map((u: any) => [u.id, `${u.firstName || ""} ${u.lastName || ""}`.trim()]));
+  const customerMap = new Map<number, string>(customersList.map((c: any) => [c.id, c.name]));
 
-  // Merge data back into opportunities
   return oppsList.map((opp) => ({
     ...opp,
     leadName: opp.leadId ? leadMap.get(opp.leadId) || null : null,
-    associatedContactName: opp.associatedContact
-      ? contactMap.get(opp.associatedContact) || null
-      : null,
-    createdByUserName: opp.createdByUserId
-      ? createdUserMap.get(opp.createdByUserId) || null
-      : null,
-    assignedUserName: opp.assignedUserId
-      ? assignedUserMap.get(opp.assignedUserId) || null
-      : null,
-    companyName: opp.customerId
-      ? customerMap.get(opp.customerId) || null
-      : null,
+    associatedContactName: opp.associatedContact ? contactMap.get(opp.associatedContact) || null : null,
+    createdByUserName: opp.createdByUserId ? createdUserMap.get(opp.createdByUserId) || null : null,
+    assignedUserName: opp.assignedUserId ? assignedUserMap.get(opp.assignedUserId) || null : null,
+    companyName: opp.customerId ? customerMap.get(opp.customerId) || null : null,
   }));
 }
+
+  /**
+   * Execute the common count + paginated data query for opportunities.
+   * Centralizes pagination logic so public methods stay concise.
+   * @param whereExpr - optional WHERE expression
+   * @param limitValue - number of records per page
+   * @param offsetValue - pagination offset
+   */
+  private async queryWithPagination(whereExpr: any, limitValue: number, offsetValue: number) {
+    const totalResult = await db.select({ count: sql<number>`count(*)` }).from(opportunities).where(whereExpr);
+    const totalcount = Number(totalResult[0]?.count ?? 0);
+
+    let rows: Opportunity[] = [];
+    if (totalcount > 0 || offsetValue === 0) {
+      rows = await db.select().from(opportunities).where(whereExpr).orderBy(desc(opportunities.createdAt)).limit(limitValue).offset(offsetValue);
+    }
+
+    return { rows, totalcount };
+  }
+
+  // --- PUBLIC METHODS ---
 
 
   /**
@@ -318,20 +259,9 @@ private async populateOpportunityDetails(oppsList: Opportunity[]): Promise<Oppor
     const whereConditions = this.buildWhereConditions(filters);
     const finalWhere = whereConditions.length > 0 ? and(...whereConditions) : undefined;
 
-    // --- Correct Total Count Query ---
-    const totalResult = await db.select({ count: sql<number>`count(*)` }).from(opportunities).where(finalWhere);
-    const totalcount = Number(totalResult[0].count);
-
-    // --- Data Query with Pagination ---
-    const oppsList = await db.select().from(opportunities).where(finalWhere).orderBy(desc(opportunities.createdAt)).limit(limitValue).offset(offsetValue);
-
-    // Prevent populating if no results
-    if (oppsList.length === 0) return [];
-
-    // Populate details AFTER getting the paginated list
-    const populatedOpps = await this.populateOpportunityDetails(oppsList);
-
-    // Attach totalcount to each item
+    const { rows, totalcount } = await this.queryWithPagination(finalWhere, limitValue, offsetValue);
+    if (rows.length === 0) return [];
+    const populatedOpps = await this.populateOpportunityDetails(rows);
     return populatedOpps.map((o) => ({ ...o, totalcount }));
   }
 
@@ -350,16 +280,9 @@ private async populateOpportunityDetails(oppsList: Opportunity[]): Promise<Oppor
     // Combine base user condition with optional filters
     const finalWhere = filterConditions.length > 0 ? and(baseUserCondition, ...filterConditions) : baseUserCondition;
 
-    // --- Correct Total Count Query ---
-    const totalResult = await db.select({ count: sql<number>`count(*)` }).from(opportunities).where(finalWhere);
-    const totalcount = Number(totalResult[0].count);
-
-    // --- Data Query with Pagination ---
-    const oppsList = await db.select().from(opportunities).where(finalWhere).orderBy(desc(opportunities.createdAt)).limit(limitValue).offset(offsetValue);
-
-    if (oppsList.length === 0) return [];
-
-    const populatedOpps = await this.populateOpportunityDetails(oppsList);
+    const { rows, totalcount } = await this.queryWithPagination(finalWhere, limitValue, offsetValue);
+    if (rows.length === 0) return [];
+    const populatedOpps = await this.populateOpportunityDetails(rows);
     return populatedOpps.map((o) => ({ ...o, totalcount }));
   }
 
@@ -378,16 +301,9 @@ private async populateOpportunityDetails(oppsList: Opportunity[]): Promise<Oppor
     // Combine base user condition with optional filters
     const finalWhere = filterConditions.length > 0 ? and(baseUserCondition, ...filterConditions) : baseUserCondition;
 
-    // --- Correct Total Count Query ---
-    const totalResult = await db.select({ count: sql<number>`count(*)` }).from(opportunities).where(finalWhere);
-    const totalcount = Number(totalResult[0].count);
-
-    // --- Data Query with Pagination ---
-    const oppsList = await db.select().from(opportunities).where(finalWhere).orderBy(desc(opportunities.createdAt)).limit(limitValue).offset(offsetValue);
-
-    if (oppsList.length === 0) return [];
-
-    const populatedOpps = await this.populateOpportunityDetails(oppsList);
+    const { rows, totalcount } = await this.queryWithPagination(finalWhere, limitValue, offsetValue);
+    if (rows.length === 0) return [];
+    const populatedOpps = await this.populateOpportunityDetails(rows);
     return populatedOpps.map((o) => ({ ...o, totalcount }));
   }
 }

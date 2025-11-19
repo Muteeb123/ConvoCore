@@ -40,10 +40,13 @@ export interface CustomerFilters {
  */
 class CustomersStorage {
   /**
-   * [HELPER] Builds dynamic WHERE conditions for customer filtering.
+   * Build dynamic WHERE conditions from the provided filter object.
+   * Returns an array of drizzle-orm expressions that can be combined
+   * with `and(...)` or passed directly to `where()` when empty.
+   * @param filters - Client-provided filter options
    */
   private buildWhereConditions(filters: CustomerFilters) {
-    const conditions = [];
+    const conditions: any[] = [];
 
     // Search Term
     if (filters.search) {
@@ -124,8 +127,10 @@ class CustomersStorage {
   }
 
   /**
-   * [HELPER] Populates assignedUserName and createdByUserName for customers.
-   * Assumes these might be denormalized but re-fetches for consistency.
+   * Populate denormalized username fields for the customers in `customersList`.
+   * Fetches minimal user rows and merges usernames back into the customer objects.
+   * @param customersList - Records returned from the customers table
+   * @returns The same records augmented with `assignedUserName` and `createdByUserName`
    */
   private async populateUserNames(customersList: Customer[]): Promise<Customer[]> {
     if (customersList.length === 0) return [];
@@ -142,7 +147,7 @@ class CustomersStorage {
     if (userIds.size === 0) return customersList; // No users to populate
 
     const usersList = await db.select({ id: users.id, username: users.username }).from(users).where(inArray(users.id, Array.from(userIds)));
-    const userMap = new Map(usersList.map(u => [u.id, u.username]));
+    const userMap = new Map(usersList.map((u: any) => [u.id, u.username]));
 
     return customersList.map(c => {
       const createdById = (c as any).createdByUserId as number | undefined;
@@ -154,138 +159,106 @@ class CustomersStorage {
       };
     });
   }
+  /**
+   * Execute a count + paginated data query for a given WHERE clause.
+   * Centralizes the repeated pattern used in the public list methods.
+   * @param whereExpr - Optional drizzle-orm expression for WHERE
+   * @param limitValue - Max rows to return
+   * @param offsetValue - Offset for pagination
+   */
+  private async queryWithPagination(whereExpr: any, limitValue: number, offsetValue: number) {
+    const totalResult = await db.select({ count: sql<number>`count(*)` }).from(customers).where(whereExpr);
+    const totalcount = Number(totalResult[0]?.count ?? 0);
 
-  // --- PUBLIC METHODS ---
+    let rows: Customer[] = [];
+    if (totalcount > 0 || offsetValue === 0) {
+      rows = await db.select().from(customers).where(whereExpr).orderBy(desc(customers.createdAt)).limit(limitValue).offset(offsetValue);
+    }
+
+    return { rows, totalcount };
+  }
 
   /**
-   * Fetches paginated/filtered list of all customers (Admin).
+   * Fetch paginated customers applying provided filters.
+   * Returns an object with `result` (the rows) and `totalcount`.
    */
   async getCustomers(
     filters: CustomerFilters = {},
     pagination: { limit?: number; offset?: number } = {}
-  ): Promise<{ result: Customer[]; totalcount: number }> { // Return structure matches frontend expectation
+  ): Promise<{ result: Customer[]; totalcount: number }> {
     const limitValue = pagination.limit ?? 25;
     const offsetValue = pagination.offset ?? 0;
     const whereConditions = this.buildWhereConditions(filters);
     const finalWhere = whereConditions.length > 0 ? and(...whereConditions) : undefined;
 
-    // --- Correct Total Count Query ---
-    const totalResult = await db.select({ count: sql<number>`count(*)` }).from(customers).where(finalWhere);
-    const totalcount = Number(totalResult[0]?.count ?? 0); // Safer count access
+    const { rows, totalcount } = await this.queryWithPagination(finalWhere, limitValue, offsetValue);
+    const populatedCustomers = await this.populateUserNames(rows);
 
-    // --- Data Query with Pagination ---
-    let customersList: Customer[] = [];
-    if (totalcount > 0 || offsetValue === 0) { // Avoid query if count is 0 and not first page
-        customersList = await db.select().from(customers).where(finalWhere).orderBy(desc(customers.createdAt)).limit(limitValue).offset(offsetValue);
-    }
-
-
-    const populatedCustomers = await this.populateUserNames(customersList);
-
-  
-    return { result: populatedCustomers, totalcount }; // Return object
+    return { result: populatedCustomers, totalcount };
   }
 
   /**
-   * Fetches paginated/filtered customers for a specific user (created or assigned).
+   * Fetch paginated customers for a single user (created or assigned).
+   * Uses the user's id and denormalized username where available to build the scope.
    */
   async getCustomersByUser(
     userId: number,
     filters: CustomerFilters = {},
     pagination: { limit?: number; offset?: number } = {}
-  ): Promise<{ result: Customer[]; totalcount: number }> { // Return structure matches frontend expectation
+  ): Promise<{ result: Customer[]; totalcount: number }> {
     const limitValue = pagination.limit ?? 25;
     const offsetValue = pagination.offset ?? 0;
 
-    // Base condition needs to check username for createdBy if using denormalized field
-    // Fetch the current user's username first
-     const currentUser = await db.select({ username: users.username }).from(users).where(eq(users.id, userId)).limit(1);
-     const currentUsername = currentUser[0]?.username;
+    // Get the username for this user if present so we can filter denormalized createdByUserName
+    const currentUser = await db.select({ username: users.username }).from(users).where(eq(users.id, userId)).limit(1);
+    const currentUsername = currentUser[0]?.username;
 
-     const baseUserConditions = [];
-     baseUserConditions.push(eq(customers.assignedUserId, userId)); // Check assigned ID
-     if (currentUsername) {
-         baseUserConditions.push(eq(customers.createdByUserName, currentUsername)); // Check created Username
-     }
+    const baseUserConditions: any[] = [eq(customers.assignedUserId, userId)];
+    if (currentUsername) baseUserConditions.push(eq(customers.createdByUserName, currentUsername));
 
-    // Ensure there's at least one base condition before creating 'or'
-    const baseUserCondition = baseUserConditions.length > 0 ? or(...baseUserConditions) : sql`1 = 0`; // Use false condition if no base match possible
+    const baseUserCondition = baseUserConditions.length > 0 ? or(...baseUserConditions) : sql`1 = 0`;
     const filterConditions = this.buildWhereConditions(filters);
-
-    // Combine base user condition with optional filters
     const finalWhere = filterConditions.length > 0 ? and(baseUserCondition, ...filterConditions) : baseUserCondition;
 
-
-    // --- Correct Total Count Query ---
-    const totalResult = await db.select({ count: sql<number>`count(*)` }).from(customers).where(finalWhere);
-    const totalcount = Number(totalResult[0]?.count ?? 0);
-
-    // --- Data Query with Pagination ---
-    let customersList: Customer[] = [];
-     if (totalcount > 0 || offsetValue === 0) {
-        customersList = await db.select().from(customers).where(finalWhere).orderBy(desc(customers.createdAt)).limit(limitValue).offset(offsetValue);
-     }
-
-    const populatedCustomers = await this.populateUserNames(customersList);
-
-    return { result: populatedCustomers, totalcount }; // Return object
+    const { rows, totalcount } = await this.queryWithPagination(finalWhere, limitValue, offsetValue);
+    const populatedCustomers = await this.populateUserNames(rows);
+    return { result: populatedCustomers, totalcount };
   }
 
   /**
-   * Fetches paginated/filtered customers for multiple users (Manager/Team Lead).
+   * Fetch paginated customers for multiple user ids (team scope).
+   * This method resolves usernames for the provided user IDs and uses
+   * them to filter denormalized `createdByUserName` when possible.
    */
   async getCustomersByUserIds(
     userIds: number[],
     filters: CustomerFilters = {},
     pagination: { limit?: number; offset?: number } = {}
-  ): Promise<{ result: Customer[]; totalcount: number }> { // Return structure matches frontend expectation
+  ): Promise<{ result: Customer[]; totalcount: number }> {
     if (!userIds || userIds.length === 0) {
-       console.warn("getCustomersByUserIds called with empty userIds array.");
-       return { result: [], totalcount: 0 };
+      console.warn("getCustomersByUserIds called with empty userIds array.");
+      return { result: [], totalcount: 0 };
     }
+
     const limitValue = pagination.limit ?? 25;
     const offsetValue = pagination.offset ?? 0;
 
-     // Get usernames for the given user IDs to filter createdByUserName
-     const userRecords = await db.select({ username: users.username }).from(users).where(inArray(users.id, userIds));
-     const usernames = userRecords.map(u => u.username).filter(Boolean); // Filter out potential nulls/empty strings
+    // Resolve usernames for createdBy filtering only when needed
+    const userRecords = await db.select({ username: users.username }).from(users).where(inArray(users.id, userIds));
+    const usernames = userRecords.map((u: any) => u.username).filter(Boolean);
 
+    const baseUserConditions: any[] = [inArray(customers.assignedUserId, userIds)];
+    if (usernames.length > 0) baseUserConditions.push(inArray(customers.createdByUserName, usernames));
 
-    const baseUserConditions = [];
-    baseUserConditions.push(inArray(customers.assignedUserId, userIds)); // Check assigned IDs
-    if (usernames.length > 0) {
-        baseUserConditions.push(inArray(customers.createdByUserName, usernames)); // Check created Usernames
-    }
-
-    const baseUserCondition = baseUserConditions.length > 0 ? or(...baseUserConditions) : sql`1 = 0`; // False if no base match possible
+    const baseUserCondition = baseUserConditions.length > 0 ? or(...baseUserConditions) : sql`1 = 0`;
     const filterConditions = this.buildWhereConditions(filters);
-
-    // Combine base user condition with optional filters
     const finalWhere = filterConditions.length > 0 ? and(baseUserCondition, ...filterConditions) : baseUserCondition;
 
-
-    // --- Correct Total Count Query ---
-    const totalResult = await db.select({ count: sql<number>`count(*)` }).from(customers).where(finalWhere);
-    const totalcount = Number(totalResult[0]?.count ?? 0);
-
-    // --- Data Query with Pagination ---
-    let customersList: Customer[] = [];
-    if (totalcount > 0 || offsetValue === 0) {
-        customersList = await db.select().from(customers).where(finalWhere).orderBy(desc(customers.createdAt)).limit(limitValue).offset(offsetValue);
-    }
-
-    const populatedCustomers = await this.populateUserNames(customersList);
-
-    return { result: populatedCustomers, totalcount }; // Return object
+    const { rows, totalcount } = await this.queryWithPagination(finalWhere, limitValue, offsetValue);
+    const populatedCustomers = await this.populateUserNames(rows);
+    return { result: populatedCustomers, totalcount };
   }
 }
 
-// TODO: Implement createCustomer
-// - Signature: async createCustomer(input: InsertCustomer): Promise<Customer>
-// - Validate input (use a Zod schema or shared `insertCustomerSchema`) before inserting
-// - Insert into `customers` table and return the created record
-// - Populate denormalized fields (assignedUserName / createdByUserName) if needed
-// - Handle file references (customerFiles) and any initial notes
-// Export a singleton instance
 export const customersStorage = new CustomersStorage();
 
