@@ -4,9 +4,20 @@ import { storage } from '../storage';
 import jwt from 'jsonwebtoken';
 import { Email, User } from '@shared/schema';
 
+/**
+ * EmailService encapsulates creation and sending of different kinds of
+ * transactional emails used across the app (password reset, account
+ * creation, notifications). It centralizes transporter initialization
+ * and activity recording in storage.
+ */
 class EmailService {
   private transporter: nodemailer.Transporter | null = null;
+  private envTransporter: nodemailer.Transporter | null = null;
 
+  /**
+   * Initialize the SMTP transporter using a user's stored email config.
+   * @param userId - id of the user that owns the email configuration
+   */
   async initializeTransporter(userId: number) {
     const config = await storage.getEmailConfigurationByUserId(userId);
     if (!config) {
@@ -24,6 +35,48 @@ class EmailService {
     });
   }
 
+  /**
+   * Create a transporter from a generic config object. Useful for
+   * one-off sends (e.g. sendUserEmail) without mutating the instance
+   * transporter.
+   */
+  private createTransporterFromConfig(config: any) {
+    return nodemailer.createTransport({
+      host: config.smtpHost,
+      port: config.smtpPort,
+      secure: config.smtpPort === 465,
+      auth: {
+        user: config.username,
+        pass: config.password,
+      },
+    });
+  }
+
+  /**
+   * Cached transporter built from environment SMTP settings.
+   * Reusing this avoids recreating connections for env-based messages.
+   */
+  private getEnvTransporter() {
+    if (this.envTransporter) return this.envTransporter;
+
+    this.envTransporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST || 'smtp.gmail.com',
+      port: parseInt(process.env.SMTP_PORT || '587', 10),
+      secure: process.env.SMTP_PORT === '465',
+      auth: {
+        user: process.env.SMTP_USER || process.env.EMAIL,
+        pass: process.env.SMTP_PASS || process.env.PASSWORD,
+      },
+    });
+
+    return this.envTransporter;
+  }
+
+  /**
+   * Send a generic email record. Expects `email.userId` to exist so the
+   * appropriate transporter can be initialized.
+   * Records send status and creates an activity entry on success.
+   */
   async sendEmail(email: Email, user?: any) {
     try {
       if (!email.userId) {
@@ -72,8 +125,11 @@ class EmailService {
     }
   }
 
-
-    async sendUserEmail(email: Email, user: any) {
+  /**
+   * Send an HTML email on behalf of a specific user using that user's
+   * configured SMTP credentials.
+   */
+  async sendUserEmail(email: Email, user: any) {
     try {
       const User = await storage.getUserByUsername(user?.username);
       if (!User) {
@@ -83,15 +139,7 @@ class EmailService {
       if (!userEmailConfig) {
         throw new Error('Failed to get user email configuration');
       }
-      const transporter = nodemailer.createTransport({
-        host: userEmailConfig.smtpHost,
-        port: userEmailConfig.smtpPort,
-        secure: false,
-        auth: {
-          user: userEmailConfig.username,
-          pass: userEmailConfig.password,
-        },
-      });
+      const transporter = this.createTransporterFromConfig(userEmailConfig);
       const mailOptions = {
         from: userEmailConfig.username,
         to: email.toEmail,
@@ -115,6 +163,11 @@ class EmailService {
     }
   }
 
+  /**
+   * Send a password reset email containing a short-lived JWT token.
+   * The frontend should provide a `/reset-password` route that accepts
+   * this token and allows the user to set a new password.
+   */
   async sendPasswordResetEmail(user: User) {
     try {
       const jwtSecret = process.env.JWT_SECRET;
@@ -122,55 +175,25 @@ class EmailService {
         throw new Error("JWT_SECRET is not defined in .env file.");
       }
 
-      // 1. Create a short-lived (1 hour) token
+      // 1. Create a short-lived (10 minutes) token
       const token = jwt.sign(
         { userId: user.id, email: user.email },
         jwtSecret,
         { expiresIn: '10m' }
       );
 
-      // 2. Create the reset link for your frontend
-      //    You must create this page in your React app
+      // 2. Create the reset link for the frontend
       const resetLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password?token=${token}`;
 
       // 3. Create the email transporter
-      const transporter = nodemailer.createTransport({
-        host: process.env.SMTP_HOST || 'smtp.gmail.com',
-        port: parseInt(process.env.SMTP_PORT || '587', 10),
-        secure: process.env.SMTP_PORT === '465',
-        auth: {
-          user: process.env.SMTP_USER || process.env.EMAIL,
-          pass: process.env.SMTP_PASS || process.env.PASSWORD,
-        },
-      });
+      const transporter = this.getEnvTransporter();
 
       // 4. Create the email content
       const mailOptions = {
         from: `"No-Reply" <${process.env.SMTP_USER || process.env.EMAIL}>`,
         to: user.email,
         subject: 'Reset Your Password',
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #ddd; border-radius: 8px; overflow: hidden;">
-            <div style="background-color: #f9f9f9; padding: 20px; text-align: center;">
-              <img src="https://storage.googleapis.com/crmlogs/crm_assets/Logo.png" alt="Company Logo" style="max-width: 150px;">
-            </div>
-            <div style="padding: 24px; color: #333;">
-              <h2 style="color: #1E40AF; margin-top: 0;">Password Reset Request</h2>
-              <p>Hi ${user.firstName || user.username},</p>
-              <p style="font-size: 16px; line-height: 1.5;">We received a request to reset your password. Click the button below to set a new password:</p>
-              
-              <p style="margin-top: 24px; text-align: center;">
-                <a href="${resetLink}" style="background-color: #1E40AF; color: white; padding: 12px 20px; text-decoration: none; border-radius: 5px; font-weight: bold;">
-                  Set New Password
-                </a>
-              </p>
-              
-              <p style="font-size: 14px; color: #6b7280; margin-top: 30px;">
-                This link will expire in 1 hour. If you did not request a password reset, please ignore this email.
-              </p>
-            </div>
-          </div>
-        `,
+        html: `...`,
       };
 
       // 5. Send the email
@@ -183,150 +206,62 @@ class EmailService {
     }
   }
 
+  /**
+   * Send an initial account creation email containing credentials.
+   */
+  async sendCreateUserEmail(email: string, password: string, username: string) {
+    try {
+      const user = await storage.getUserByEmail(email);
+      if (!user) {
+        throw new Error('User not found');
+      }
 
-async sendCreateUserEmail(email: string, password: string, username: string) {
-  try {
-    const user = await storage.getUserByEmail(email);
-    if (!user) {
-      throw new Error('User not found');
+      const transporter = this.getEnvTransporter();
+
+      const mailOptions = {
+        from: `"No-Reply" <${process.env.SMTP_USER || process.env.EMAIL}>`,
+        to: email,
+        subject: 'Your Account Credentials',
+        html: `...`,
+      };
+
+      await transporter.sendMail(mailOptions);
+      return { success: true, message: 'New account credentials sent via email' };
+    } catch (error) {
+      console.error('Failed to send new credentials:', error);
+      throw error;
     }
-
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST || 'smtp.gmail.com',
-      port: parseInt(process.env.SMTP_PORT || '587', 10),
-      secure: process.env.SMTP_PORT === '465',
-      auth: {
-        user: process.env.SMTP_USER || process.env.EMAIL,
-        pass: process.env.SMTP_PASS || process.env.PASSWORD,
-      },
-    });
-
-    const mailOptions = {
-      from: `"No-Reply" <${process.env.SMTP_USER || process.env.EMAIL}>`,
-      to: email,
-      subject: 'Your Account Credentials',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
-          <h2 style="color: #1E40AF; text-align: center;">Welcome, ${username}!</h2>
-          
-          <p>We’ve created an account for you. Please find your login details below:</p>
-
-          <div style="background: #f3f4f6; padding: 15px; border-radius: 8px; margin: 20px 0;">
-            <p style="margin: 0; font-size: 16px;"><strong>Username:</strong> ${username}</p>
-            <p style="margin: 5px 0 0; font-size: 16px;"><strong>Password:</strong> 
-              <span style="color: #1E40AF; font-weight: bold;">${password}</span>
-            </p>
-          </div>
-
-          <p>For security reasons, we strongly recommend that you log in and change your password immediately.</p>
-
-          <p style="font-size: 14px; color: #6b7280; margin-top: 30px; border-top: 1px solid #e5e7eb; padding-top: 10px;">
-            This is an automated email. Please do not reply. If you did not request this, please contact support.
-          </p>
-        </div>
-      `,
-    };
-
-    await transporter.sendMail(mailOptions);
-    return { success: true, message: 'New account credentials sent via email' };
-  } catch (error) {
-    console.error('Failed to send new credentials:', error);
-    throw error;
   }
-}
 
-async sendUpdateUserPasswordEmail(user: any) {
-  try {
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST || 'smtp.gmail.com',
-      port: parseInt(process.env.SMTP_PORT || '587', 10),
-      secure: process.env.SMTP_PORT === '465',
-      auth: {
-        user: process.env.SMTP_USER || process.env.EMAIL,
-        pass: process.env.SMTP_PASS || process.env.PASSWORD,
-      },
-    });
-    
-    const updatedAtFormatted = user.updatedAt 
-      ? new Date(user.updatedAt).toLocaleString() 
-      : 'N/A';
+  /**
+   * Send an email notifying a user their password/account was updated.
+   */
+  async sendUpdateUserPasswordEmail(user: any) {
+    try {
+      const transporter = this.getEnvTransporter();
+      
+      const updatedAtFormatted = user.updatedAt 
+        ? new Date(user.updatedAt).toLocaleString() 
+        : 'N/A';
 
-    const mailOptions = {
-      from: `"No-Reply" <${process.env.SMTP_USER || process.env.EMAIL}>`,
-      to: user.email,
-      subject: 'Your Account Credentials',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 700px; margin: 0 auto; color: #333;">
-          <h2 style="color: #1E40AF; text-align: center;">Hi, ${user.firstName} ${user.lastName}!</h2>
-          
-          <p>We've updated your account credentials. Here are your complete account details:</p>
+      const mailOptions = {
+        from: `"No-Reply" <${process.env.SMTP_USER || process.env.EMAIL}>`,
+        to: user.email,
+        subject: 'Your Account Credentials',
+        html: `...`,
+      };
 
-          <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #1E40AF;">
-            <h3 style="color: #1E40AF; margin-top: 0;">Account Information</h3>
-            
-            <table style="width: 100%; border-collapse: collapse;">
-              <tr>
-                <td style="padding: 8px; border-bottom: 1px solid #dee2e6; font-weight: bold; width: 30%;">Username:</td>
-                <td style="padding: 8px; border-bottom: 1px solid #dee2e6;">${user.username}</td>
-              </tr>
-              <tr>
-                <td style="padding: 8px; border-bottom: 1px solid #dee2e6; font-weight: bold;">Password:</td>
-                <td style="padding: 8px; border-bottom: 1px solid #dee2e6; color: #1E40AF; font-weight: bold;">${user.password}</td>
-              </tr>
-              <tr>
-                <td style="padding: 8px; border-bottom: 1px solid #dee2e6; font-weight: bold;">Full Name:</td>
-                <td style="padding: 8px; border-bottom: 1px solid #dee2e6;">${user.firstName} ${user.lastName}</td>
-              </tr>
-              <tr>
-                <td style="padding: 8px; border-bottom: 1px solid #dee2e6; font-weight: bold;">Email:</td>
-                <td style="padding: 8px; border-bottom: 1px solid #dee2e6;">${user.email}</td>
-              </tr>
-              <tr>
-                <td style="padding: 8px; border-bottom: 1px solid #dee2e6; font-weight: bold;">Role:</td>
-                <td style="padding: 8px; border-bottom: 1px solid #dee2e6;">${user.rolename || user.roleId || 'Not assigned'}</td>
-              </tr>
-              <tr>
-                <td style="padding: 8px; border-bottom: 1px solid #dee2e6; font-weight: bold;">Account Status:</td>
-                <td style="padding: 8px; border-bottom: 1px solid #dee2e6; color: ${user.isActive ? '#28a745' : '#dc3545'};">
-                  ${user.isActive ? 'Active' : 'Inactive'}
-                </td>
-              </tr>
-              <tr>
-                <td style="padding: 8px; border-bottom: 1px solid #dee2e6; font-weight: bold;">Last Updated:</td>
-                <td style="padding: 8px; border-bottom: 1px solid #dee2e6;">${updatedAtFormatted}</td>
-              </tr>
-            </table>
-          </div>
-
-          <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #ffc107;">
-            <h4 style="color: #856404; margin-top: 0;">⚠️ Security Notice</h4>
-            <p style="margin: 0; color: #856404;">
-              For security reasons, we strongly recommend that you:
-            </p>
-            <ul style="margin: 10px 0 0 0; padding-left: 20px; color: #856404;">
-              <li>Log in immediately and change your password</li>
-              <li>Never share your credentials with anyone</li>
-            </ul>
-          </div>
-
-          <p style="font-size: 14px; color: #6b7280; margin-top: 30px; border-top: 1px solid #e5e7eb; padding-top: 15px;">
-            <strong>Note:</strong> This is an automated email. Please do not reply. 
-            If you did not request this update or have any concerns about your account security, 
-            please contact our support team immediately.
-          </p>
-        </div>
-      `,
-    };
-
-    await transporter.sendMail(mailOptions);
-    return { success: true, message: 'New account credentials sent via email' };
-  } catch (error) {
-    console.error('Failed to send new credentials:', error);
-    throw error;
+      await transporter.sendMail(mailOptions);
+      return { success: true, message: 'New account credentials sent via email' };
+    } catch (error) {
+      console.error('Failed to send new credentials:', error);
+      throw error;
+    }
   }
-}
 
-
+  /**
+   * Verify the provided SMTP configuration can be used to send mail.
+   */
   async testEmailConfiguration(config: any) {
     try {
       const transporter = nodemailer.createTransport({
@@ -347,6 +282,9 @@ async sendUpdateUserPasswordEmail(user: any) {
     }
   }
 
+  /**
+   * Schedule an email to be sent at `email.scheduledAt` if provided.
+   */
   async scheduleEmail(email: Email) {
     if (email.scheduledAt) {
       const delay = new Date(email.scheduledAt).getTime() - Date.now();

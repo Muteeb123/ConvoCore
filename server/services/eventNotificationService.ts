@@ -7,44 +7,68 @@ const COMPANY_LOGO_URL = "https://storage.googleapis.com/crmlogs/crm_assets/Logo
 // URL for the "View in CRM" button (set this in your .env)
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://your-crm-url.com";
 
-// Define the event types you listed
+// Define the event types supported by this service
 type NotificationEventType =
   | "new_lead"
   | "new_opportunity"
   | "opportunity_converted"
-  | "opportunity_closed_lost" // Added this
+  | "opportunity_closed_lost"
   | "task_assigned";
 
 /**
- * Service for handling event-based notifications with hierarchy logic.
+ * EventNotificationService
+ *
+ * Responsible for determining the hierarchy recipients for an event
+ * (team leads, managers, admins, etc.), filtering recipients by their
+ * notification preferences, and sending formatted emails.
  */
 class EventNotificationService {
 
+  // Cache a shared transporter for repeated sends with the same SMTP env config.
+  private static _sharedTransporter: nodemailer.Transporter | null = null;
+
   /**
-   * This is the main function you will call from your API routes.
-   * @param actor - The user *performing* the action (req.user)
-   * @param eventType - The type of event
-   * @param entity - The data associated (the new lead, task, etc.)
+   * Return a shared transporter built from environment SMTP settings.
+   * Caching prevents re-creating the transporter on every email send.
+   */
+  private getSharedTransporter() {
+    if (EventNotificationService._sharedTransporter) return EventNotificationService._sharedTransporter;
+
+    EventNotificationService._sharedTransporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST || 'smtp.gmail.com',
+      port: parseInt(process.env.SMTP_PORT || '465', 10),
+      secure: true,
+      auth: {
+        user: process.env.SMTP_USER || process.env.EMAIL,
+        pass: process.env.SMTP_PASS || process.env.PASSWORD,
+      },
+    });
+
+    return EventNotificationService._sharedTransporter;
+  }
+
+  /**
+   * Entrypoint used by controllers when an important event occurs.
+   * It resolves recipients via role/team logic, filters by preferences,
+   * and sends formatted emails to each final recipient. Handles the
+   * special case of notifying the assignee for task assignment events.
+   *
+   * @param actor - user object performing the action
+   * @param eventType - one of the supported NotificationEventType values
+   * @param entity - the domain object related to the event (lead, task, etc.)
    */
   async notifyOnEvent(actor: User, eventType: NotificationEventType, entity: any) {
     try {
       console.log(`[EventNotificationService] 🚀 Event triggered: ${eventType} by ${actor.username} (ID: ${actor.id})`);
 
-      // 1. Get recipients based on actor's role and team
+      // Resolve potential recipients based on actor's role and team
       const recipients = await this.getRecipients(actor);
       console.log(`[EventNotificationService] 👥 Found ${recipients.length} potential recipients (before filtering).`);
 
-      // 2. Filter recipients:
-      //    - Must not be the person who did the action.
-      //    - Must have 'isEmailNotification' set to true (or null/undefined, defaulting to true).
+      // Filter out the actor and users who have disabled hierarchy emails
       const finalRecipients = recipients.filter(user => {
         const isNotActor = user.id !== actor.id;
-        
-        // --- THIS IS THE NEW CHECK ---
-        // Defaults to 'true' if the column is null or undefined
-        const hasOptedIn = user.isEmailNotification ?? true; 
-        // --------------------------
-
+        const hasOptedIn = user.isEmailNotification ?? true; // default to true
         if (isNotActor && !hasOptedIn) {
           console.log(`[EventNotificationService] 🚫 Skipped hierarchy email for ${user.username} (notifications disabled).`);
         }
@@ -52,31 +76,27 @@ class EventNotificationService {
       });
       console.log(`[EventNotificationService] 👥 Found ${finalRecipients.length} final recipients (after filtering).`);
 
-
-      // 3. Send emails to the hierarchy
+      // Send email to each recipient in the hierarchy
       for (const recipient of finalRecipients) {
         console.log(`[EventNotificationService] 📧 Preparing hierarchy email for: ${recipient.username} (ID: ${recipient.id})`);
         const { subject, htmlBody } = await this.generateEventEmailContent(recipient, actor, eventType, entity);
         await this.sendEmail(recipient.email, subject, htmlBody);
       }
-      
-      // 4. Special Case: "Task Assigned"
-      // Also notify the person the task was *assigned to*
+
+      // Special-case: also notify the assignee when a task is assigned
       if (eventType === 'task_assigned' && (entity as Task).assignedUserId) {
         console.log(`[EventNotificationService] 🎯 Task event: checking assignee...`);
         const assignee = await storage.getUser((entity as Task).assignedUserId!);
-        
-        // --- ADDED CHECK FOR 'isEmailNotification' ---
         const hasOptedIn = assignee?.isEmailNotification ?? true;
 
         if (assignee && assignee.id !== actor.id && hasOptedIn) {
-           console.log(`[EventNotificationService] 📧 Preparing assignee email for: ${assignee.username}`);
-           const { subject, htmlBody } = this.generateTaskAssignedToUserEmail(assignee, actor, entity);
-           await this.sendEmail(assignee.email, subject, htmlBody);
+          console.log(`[EventNotificationService] 📧 Preparing assignee email for: ${assignee.username}`);
+          const { subject, htmlBody } = this.generateTaskAssignedToUserEmail(assignee, actor, entity);
+          await this.sendEmail(assignee.email, subject, htmlBody);
         } else if (assignee && !hasOptedIn) {
-           console.log(`[EventNotificationService] 🚫 Skipped assignee email for ${assignee.username} (notifications disabled).`);
+          console.log(`[EventNotificationService] 🚫 Skipped assignee email for ${assignee.username} (notifications disabled).`);
         } else if (assignee && assignee.id === actor.id) {
-            console.log(`[EventNotificationService] 🚫 Skipped assignee email (assignee is the actor).`);
+          console.log(`[EventNotificationService] 🚫 Skipped assignee email (assignee is the actor).`);
         }
       }
 
@@ -90,11 +110,10 @@ class EventNotificationService {
   // =================================================================
 
   /**
-   * Main router for getting recipients based on the actor's role.
-   * This uses the `userType` column from your `users` table.
+   * Route the actor to the correct recipient resolver based on role.
    */
   private async getRecipients(actor: User): Promise<User[]> {
-    const role = actor.userType; // 'associate', 'team-lead', 'manager', 'admin'
+    const role = actor.userType; // expected: 'associate' | 'team-lead' | 'manager' | 'admin'
     console.log(`[EventNotificationService] 🧑‍💻 Getting recipients for userType: ${role}`);
 
     switch (role) {
@@ -113,70 +132,60 @@ class EventNotificationService {
   }
 
   /**
-   * An Associate's action notifies their Team Leads, Managers, and all Admins.
-   * This function reads the response from your `storage.getTeamsByUserId`.
+   * Associate -> notify Team Leads, Managers, and all Admins
    */
   private async getRecipientsForAssociate(actor: User): Promise<User[]> {
     console.log(`[EventNotificationService] ➡️ Processing 'associate' logic...`);
     const allAdmins = await storage.getAdminUsers();
-    
-    // Use your existing function
     const teamData = await storage.getTeamsByUserId(actor.id);
     const teamMembers = this.extractUsersFromTeamData(teamData);
 
-    // Filter for managers and team leads
     const managers = teamMembers.filter(user => user.userType === 'manager');
     const teamLeads = teamMembers.filter(user => user.userType === 'team-lead');
-    
+
     const combined = this.deduplicateUsers([...allAdmins, ...managers, ...teamLeads]);
     console.log(`[EventNotificationService] ➡️ Found ${allAdmins.length} Admins, ${managers.length} Managers, ${teamLeads.length} Team Leads. Total unique: ${combined.length}`);
     return combined;
   }
 
   /**
-   * A Team Lead's action notifies their Managers and all Admins.
+   * Team Lead -> notify Managers and all Admins
    */
   private async getRecipientsForTeamLead(actor: User): Promise<User[]> {
     console.log(`[EventNotificationService] ➡️ Processing 'team-lead' logic...`);
     const allAdmins = await storage.getAdminUsers();
-
     const teamData = await storage.getTeamsByUserId(actor.id);
     const teamMembers = this.extractUsersFromTeamData(teamData);
-    
-    // Filter for managers only
+
     const managers = teamMembers.filter(user => user.userType === 'manager');
-    
     const combined = this.deduplicateUsers([...allAdmins, ...managers]);
     console.log(`[EventNotificationService] ➡️ Found ${allAdmins.length} Admins, ${managers.length} Managers. Total unique: ${combined.length}`);
     return combined;
   }
 
   /**
-   * A Manager's action notifies all Admins AND other Managers on their team.
+   * Manager -> notify Admins and other Managers on team
    */
   private async getRecipientsForManager(actor: User): Promise<User[]> {
     console.log(`[EventNotificationService] ➡️ Processing 'manager' logic...`);
     const allAdmins = await storage.getAdminUsers();
-
     const teamData = await storage.getTeamsByUserId(actor.id);
     const teamMembers = this.extractUsersFromTeamData(teamData);
 
-    // Filter for OTHER managers only
     const otherManagers = teamMembers.filter(user => user.userType === 'manager' && user.id !== actor.id);
-
     const combined = this.deduplicateUsers([...allAdmins, ...otherManagers]);
     console.log(`[EventNotificationService] ➡️ Found ${allAdmins.length} Admins, ${otherManagers.length} other Managers. Total unique: ${combined.length}`);
     return combined;
   }
 
   /**
-   * An Admin's action notifies all *other* Admins.
+   * Admin -> notify all Admins
    */
   private async getRecipientsForAdmin(actor: User): Promise<User[]> {
     console.log(`[EventNotificationService] ➡️ Processing 'admin' logic...`);
     const allAdmins = await storage.getAdminUsers();
     console.log(`[EventNotificationService] ➡️ Found ${allAdmins.length} Admins.`);
-    return allAdmins; // All admins (will be filtered later)
+    return allAdmins;
   }
 
   // =================================================================
@@ -184,26 +193,17 @@ class EventNotificationService {
   // =================================================================
 
   /**
-   * Sends an email using the system's SMTP credentials.
-   * This logic is copied from your `emailService.sendPasswordResetEmail`.
+   * Send a plain HTML email to a recipient using SMTP config from env.
    */
   private async sendEmail(to: string, subject: string, htmlBody: string) {
      console.log(`[EventNotificationService] ✉️  Attempting to send email to: ${to} | Subject: ${subject}`);
      try {
-        const transporter = nodemailer.createTransport({
-          host: process.env.SMTP_HOST || 'smtp.gmail.com',
-          port: parseInt(process.env.SMTP_PORT || '465', 10), // Using 465
-          secure: true, // Secure 'true' for port 465
-          auth: {
-            user: process.env.SMTP_USER || process.env.EMAIL,
-            pass: process.env.SMTP_PASS || process.env.PASSWORD,
-          },
-        });
+        const transporter = this.getSharedTransporter();
 
         const mailOptions = {
           from: `"No-Reply" <${process.env.SMTP_USER || process.env.EMAIL}>`,
-          to: to,
-          subject: subject,
+          to,
+          subject,
           html: htmlBody,
         };
 
@@ -213,9 +213,10 @@ class EventNotificationService {
         console.error(`[EventNotificationService] ❌ FAILED to send email to ${to}:`, error);
      }
   }
-  
+
   /**
-   * Generates the HTML template for a hierarchy notification.
+   * Build subject and HTML body for a given event and recipient. Uses
+   * the actor and entity to craft contextual messaging.
    */
   private async generateEventEmailContent(recipient: User, actor: User, eventType: string, entity: any) {
     let subject = "";
@@ -261,7 +262,7 @@ class EventNotificationService {
   }
 
   /**
-   * Generates the specific email for the user a task was *assigned to*.
+   * Create the HTML body used when notifying the user the task was assigned.
    */
   private generateTaskAssignedToUserEmail(assignee: User, actor: User, task: Task) {
     const actorName = `${actor.firstName || ''} ${actor.lastName || ''} (${actor.username})`.trim();
@@ -284,7 +285,7 @@ class EventNotificationService {
   // =================================================================
 
   /**
-   * A single, reusable HTML email template with your logo.
+   * Reusable HTML email template used across event types.
    */
   private getHtmlTemplate(recipient: User, title: string, message: string, buttonText: string = "View in CRM") {
     return `
@@ -309,10 +310,10 @@ class EventNotificationService {
       </div>
     `;
   }
-  
+
   /**
-   * Parses the complex structure from `storage.getTeamsByUserId`
-   * and returns a simple array of User objects.
+   * Normalize and extract users from the various team shapes returned by storage.
+   * Accepts both `memberTeams` and `createdTeamsFormatted` shaped responses.
    */
   private extractUsersFromTeamData(teamData: any[]): User[] {
     const allMembers: User[] = [];
@@ -322,16 +323,13 @@ class EventNotificationService {
     }
 
     for (const teamWrapper of teamData) {
-      // Structure from `memberTeams`
       if (teamWrapper.team && teamWrapper.team.members) {
         for (const member of teamWrapper.team.members) {
           if (member.user) {
             allMembers.push(member.user);
           }
         }
-      }
-      // Structure from `createdTeamsFormatted` (which you have in storage)
-      else if (teamWrapper.members) {
+      } else if (teamWrapper.members) {
          for (const member of teamWrapper.members) {
            if (member.user) {
             allMembers.push(member.user);
@@ -342,9 +340,9 @@ class EventNotificationService {
     console.log(`[EventNotificationService] 🛠️ Extracted ${allMembers.length} total members from team data.`);
     return allMembers;
   }
-  
+
   /**
-   * Helper function to remove duplicate users from a list.
+   * Remove duplicate users (by id) while preserving order of first occurrence.
    */
   private deduplicateUsers(users: User[]): User[] {
     const uniqueUsers = Array.from(new Map(users.map(user => [user.id, user])).values());
